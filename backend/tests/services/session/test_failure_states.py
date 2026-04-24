@@ -41,5 +41,6 @@ async def test_llm_failure_keeps_transcription_running() -> None:
 
     events = manager.list_events(session_id)
 
-    assert any(event.type == "transcript" for event in events)
+    assert any(event.type == "transcript_turn" for event in events)
+    assert not any(event.type == "transcript" for event in events)
     assert any(event.type == "session_status" and event.status == "coaching_unavailable" for event in events)

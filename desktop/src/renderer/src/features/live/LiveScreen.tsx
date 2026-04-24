@@ -4,9 +4,11 @@ import { MicIndicator } from "./MicIndicator";
 import { NudgePanel } from "./NudgePanel";
 import { TranscriptPanel } from "./TranscriptPanel";
 import type { SessionState } from "../../lib/state/sessionReducer";
+import type { TranscriptionConfig } from "../../lib/types/session";
 
 type LiveScreenProps = {
   state: SessionState;
+  onApplyTranscription: (config: TranscriptionConfig) => void;
   onPauseCoaching: () => void;
   onStopSession: () => void;
   onToggleDebug: () => void;
@@ -22,6 +24,7 @@ function formatPersona(value: SessionState["setup"]["persona"]): string {
 
 export function LiveScreen({
   state,
+  onApplyTranscription,
   onPauseCoaching,
   onStopSession,
   onToggleDebug,
@@ -80,7 +83,9 @@ export function LiveScreen({
         enabled={state.debugEnabled}
         logs={state.debugLogs}
         onClose={onToggleDebug}
+        onApplyTranscription={onApplyTranscription}
         open={state.debugOpen}
+        transcription={state.setup.transcription}
       />
     </main>
   );

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SetupScreen } from "../features/setup/SetupScreen";
@@ -17,16 +17,35 @@ describe("SetupScreen", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders only microphone, capture mode, and persona setup fields", async () => {
-    render(<SetupScreen onStart={vi.fn()} />);
+  it("shows advanced transcription controls behind the setup gear button", async () => {
+    const onStart = vi.fn();
+
+    render(<SetupScreen debugEnabled onStart={onStart} />);
 
     await waitFor(() => {
       expect(screen.getByLabelText(/microphone/i)).toBeInTheDocument();
     });
 
+    fireEvent.click(screen.getByRole("button", { name: /advanced transcription/i }));
+    fireEvent.change(screen.getByLabelText(/transcription provider/i), {
+      target: { value: "nemo" },
+    });
+    fireEvent.change(screen.getByLabelText(/vad minimum silence/i), {
+      target: { value: "900" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start session/i }));
+
     expect(screen.getByLabelText(/capture mode/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/persona/i)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/endpoint url/i)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/model name/i)).not.toBeInTheDocument();
+    expect(onStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transcription: expect.objectContaining({
+          provider: "nemo",
+          vad: expect.objectContaining({
+            minSilenceMs: 900,
+          }),
+        }),
+      }),
+    );
   });
 });

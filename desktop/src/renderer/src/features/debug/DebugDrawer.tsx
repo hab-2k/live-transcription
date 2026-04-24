@@ -1,13 +1,32 @@
+import { useEffect, useState } from "react";
+
 import type { DebugLog } from "../../lib/state/sessionReducer";
+import type { TranscriptionConfig } from "../../lib/types/session";
+import { TranscriptionSettingsFields } from "../transcription/TranscriptionSettingsFields";
 
 type DebugDrawerProps = {
   enabled: boolean;
   open: boolean;
   logs: DebugLog[];
+  transcription?: TranscriptionConfig;
+  onApplyTranscription?: (config: TranscriptionConfig) => void;
   onClose: () => void;
 };
 
-export function DebugDrawer({ enabled, open, logs, onClose }: DebugDrawerProps) {
+export function DebugDrawer({
+  enabled,
+  open,
+  logs,
+  transcription,
+  onApplyTranscription,
+  onClose,
+}: DebugDrawerProps) {
+  const [draftConfig, setDraftConfig] = useState<TranscriptionConfig | null>(transcription ?? null);
+
+  useEffect(() => {
+    setDraftConfig(transcription ?? null);
+  }, [transcription, open]);
+
   if (!enabled || !open) {
     return null;
   }
@@ -35,6 +54,21 @@ export function DebugDrawer({ enabled, open, logs, onClose }: DebugDrawerProps) 
         <h3>Noise control</h3>
         <p>Keep preprocessing and signal diagnostics out of the colleague-facing view.</p>
       </section>
+
+      {draftConfig !== null ? (
+        <section className="debug-section">
+          <h3>Transcription settings</h3>
+          <p>Adjust provider, segmentation, and Silero VAD settings without restarting the app.</p>
+          <TranscriptionSettingsFields config={draftConfig} onChange={setDraftConfig} />
+          <button
+            className="ghost-button"
+            onClick={() => onApplyTranscription?.(draftConfig)}
+            type="button"
+          >
+            Apply transcription settings
+          </button>
+        </section>
+      ) : null}
 
       <section className="debug-section">
         <h3>Recent events</h3>

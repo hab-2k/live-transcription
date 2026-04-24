@@ -9,7 +9,7 @@ from tests.fakes.fake_provider import FakeProvider
 
 
 @pytest.mark.asyncio
-async def test_mode2_maps_microphone_to_colleague_and_blackhole_to_customer() -> None:
+async def test_mode2_emits_revisable_turns_per_source() -> None:
     manager = SessionManager(
         capture_service=FakeCapture(
             frames=[
@@ -33,4 +33,8 @@ async def test_mode2_maps_microphone_to_colleague_and_blackhole_to_customer() ->
 
     events = manager.list_events(session_id)
 
-    assert [event.role for event in events[:2]] == ["colleague", "customer"]
+    transcript_turns = [event for event in events if event.type == "transcript_turn"]
+
+    assert any(event.role == "colleague" and event.source == "microphone" for event in transcript_turns)
+    assert any(event.role == "customer" and event.source == "blackhole" for event in transcript_turns)
+    assert not any(event.type == "transcript" for event in events)

@@ -16,6 +16,7 @@ DEFAULT_MAX_STEPS_PER_TIMESTEP = 5
 
 def _build_metrics(
     *,
+    provider: str,
     model_path: Path,
     audio_path: Path,
     transcript: str,
@@ -28,7 +29,7 @@ def _build_metrics(
     mean_chunk_compute_secs = elapsed_secs / chunk_count
 
     return {
-        "provider": "nemo",
+        "provider": provider,
         "model_path": str(model_path),
         "audio_path": str(audio_path),
         "audio_duration_secs": round(audio_duration_secs, 3),
@@ -43,7 +44,7 @@ def _build_metrics(
     }
 
 
-def _run_nemo_buffered_benchmark(*, model_path: Path, audio_path: Path) -> dict[str, object]:
+def _run_buffered_benchmark(*, provider: str, model_path: Path, audio_path: Path) -> dict[str, object]:
     import soundfile as sf
     import torch
     from omegaconf import OmegaConf, open_dict
@@ -117,6 +118,7 @@ def _run_nemo_buffered_benchmark(*, model_path: Path, audio_path: Path) -> dict[
     transcript = hyps[0].text if hyps else ""
 
     return _build_metrics(
+        provider=provider,
         model_path=model_path,
         audio_path=audio_path,
         transcript=transcript,
@@ -127,9 +129,30 @@ def _run_nemo_buffered_benchmark(*, model_path: Path, audio_path: Path) -> dict[
     )
 
 
-async def run_nemo_buffered_benchmark(*, model_path: Path, audio_path: Path) -> dict[str, object]:
+async def run_buffered_benchmark(*, provider: str, model_path: Path, audio_path: Path) -> dict[str, object]:
     return await asyncio.to_thread(
-        _run_nemo_buffered_benchmark,
+        _run_buffered_benchmark,
+        provider=provider,
+        model_path=model_path,
+        audio_path=audio_path,
+    )
+
+
+async def run_nemo_buffered_benchmark(*, model_path: Path, audio_path: Path) -> dict[str, object]:
+    return await run_buffered_benchmark(
+        provider="nemo",
+        model_path=model_path,
+        audio_path=audio_path,
+    )
+
+
+async def run_parakeet_unified_buffered_benchmark(
+    *,
+    model_path: Path,
+    audio_path: Path,
+) -> dict[str, object]:
+    return await run_buffered_benchmark(
+        provider="parakeet_unified",
         model_path=model_path,
         audio_path=audio_path,
     )
@@ -139,7 +162,7 @@ async def run_benchmark(*, provider: str, model_path: str, audio: str) -> dict[s
     model = Path(model_path)
     audio_file = Path(audio)
 
-    if provider != "nemo":
+    if provider not in {"nemo", "parakeet_unified"}:
         raise ValueError(f"Unsupported provider for benchmark: {provider}")
 
     if not model.exists():
@@ -148,7 +171,13 @@ async def run_benchmark(*, provider: str, model_path: str, audio: str) -> dict[s
     if not audio_file.exists():
         raise FileNotFoundError(f"Audio file does not exist: {audio_file}")
 
-    return await run_nemo_buffered_benchmark(
+    if provider == "nemo":
+        return await run_nemo_buffered_benchmark(
+            model_path=model,
+            audio_path=audio_file,
+        )
+
+    return await run_parakeet_unified_buffered_benchmark(
         model_path=model,
         audio_path=audio_file,
     )

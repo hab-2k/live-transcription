@@ -47,6 +47,8 @@ def normalize_turn_event(
     event: Literal["started", "updated", "finalized"],
     role: str,
     update: ProviderTranscriptUpdate,
+    text: str | None = None,
+    started_at: str | None = None,
 ) -> TranscriptTurnEvent:
     return TranscriptTurnEvent(
         type="transcript_turn",
@@ -55,9 +57,9 @@ def normalize_turn_event(
         event=event,
         source=update.source,
         role=role,
-        text=update.text,
+        text=update.text if text is None else text,
         is_final=update.is_final,
-        started_at=update.started_at,
+        started_at=update.started_at if started_at is None else started_at,
         ended_at=update.ended_at,
         confidence=update.confidence,
     )

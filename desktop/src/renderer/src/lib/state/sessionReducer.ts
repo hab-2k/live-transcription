@@ -2,7 +2,8 @@ import type {
   CoachingNudgeEvent,
   RuleFlagEvent,
   SessionEvent,
-  TranscriptEvent,
+  TranscriptionConfig,
+  TranscriptTurnEvent,
   VoiceActivityEvent,
 } from "../types/session";
 
@@ -13,6 +14,7 @@ export type SessionSetup = {
   captureMode: CaptureMode;
   persona: Persona;
   microphoneDeviceId: string;
+  transcription: TranscriptionConfig;
 };
 
 export type DebugLog = {
@@ -30,7 +32,7 @@ export type VoiceActivity = {
 export type SessionState = {
   status: "setup" | "live" | "ended";
   coachingPaused: boolean;
-  transcript: TranscriptEvent[];
+  transcript: TranscriptTurnEvent[];
   nudges: CoachingNudgeEvent[];
   voiceActivity: VoiceActivity;
   debugEnabled: boolean;
@@ -47,6 +49,7 @@ export type SessionState = {
 
 type SessionAction =
   | { type: "start_session"; setup: SessionSetup }
+  | { type: "update_transcription_config"; transcription: TranscriptionConfig }
   | {
       type: "complete_session";
       summary: {
@@ -58,10 +61,29 @@ type SessionAction =
   | { type: "toggle_debug" }
   | { type: "ingest_event"; event: SessionEvent };
 
+export function createDefaultTranscriptionConfig(captureMode: CaptureMode): TranscriptionConfig {
+  return {
+    provider: "parakeet_unified",
+    latencyPreset: "balanced",
+    segmentation: {
+      policy: captureMode === "mic_only" ? "fixed_lines" : "source_turns",
+    },
+    coaching: {
+      windowPolicy: "finalized_turns",
+    },
+    vad: {
+      provider: "silero_vad",
+      threshold: 0.5,
+      minSilenceMs: captureMode === "mic_only" ? 700 : 600,
+    },
+  };
+}
+
 const DEFAULT_SETUP: SessionSetup = {
   captureMode: "mic_plus_blackhole",
   persona: "colleague_contact",
   microphoneDeviceId: "",
+  transcription: createDefaultTranscriptionConfig("mic_plus_blackhole"),
 };
 
 function makeDebugLog(label: string, message: string): DebugLog {
@@ -77,6 +99,25 @@ const INITIAL_VOICE_ACTIVITY: VoiceActivity = {
   microphone: { level: 0, active: false },
   blackhole: { level: 0, active: false },
 };
+
+function upsertTranscriptTurn(
+  transcript: TranscriptTurnEvent[],
+  event: TranscriptTurnEvent,
+): TranscriptTurnEvent[] {
+  const index = transcript.findIndex((row) => row.turn_id === event.turn_id);
+
+  if (index === -1) {
+    return [...transcript, event];
+  }
+
+  if (transcript[index].revision >= event.revision) {
+    return transcript;
+  }
+
+  const next = transcript.slice();
+  next[index] = event;
+  return next;
+}
 
 export function createInitialSessionState(debugEnabled: boolean): SessionState {
   return {
@@ -113,6 +154,21 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
           makeDebugLog("Coaching engine", `Persona: ${action.setup.persona}`),
         ],
       };
+    case "update_transcription_config":
+      return {
+        ...state,
+        setup: {
+          ...state.setup,
+          transcription: action.transcription,
+        },
+        debugLogs: [
+          makeDebugLog(
+            "Transcription",
+            `Provider: ${action.transcription.provider}, latency: ${action.transcription.latencyPreset}`,
+          ),
+          ...state.debugLogs,
+        ].slice(0, 10),
+      };
     case "complete_session":
       return {
         ...state,
@@ -130,10 +186,10 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         debugOpen: !state.debugOpen,
       };
     case "ingest_event":
-      if (action.event.type === "transcript") {
+      if (action.event.type === "transcript_turn") {
         return {
           ...state,
-          transcript: [...state.transcript, action.event],
+          transcript: upsertTranscriptTurn(state.transcript, action.event),
         };
       }
 

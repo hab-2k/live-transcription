@@ -6,15 +6,18 @@ Desktop demo for live transcription, dual-source capture, and colleague-facing c
 
 - `Electron + React` desktop shell
 - Local `FastAPI` backend
-- Replaceable ASR provider contract with `NeMo` as the default backend
+- Replaceable ASR provider contract with `parakeet_unified` as the default backend
+- `silero-vad` backed segmentation controls
 - OpenAI-compatible LLM adapter for local or remote coaching endpoints
 
 ## Current Status
 
-- `mic only` mode produces normalized `shared` transcript events
+- `mic only` mode produces revisable `transcript_turn` events in the shared lane
 - `mic + BlackHole` mode maps `microphone -> colleague audio` and `BlackHole -> customer audio`
-- live nudges, rule flags, debug drawer, and after-call summary scaffolding are implemented
-- the renderer only consumes normalized session events and does not depend on NeMo-specific payloads
+- provider output is normalized in the backend before the renderer sees it
+- the renderer updates turns in place by `turn_id` / `revision`
+- setup and live debug surfaces expose dev-only provider, segmentation, coaching-window, and VAD controls
+- live reconfiguration restarts only the active transcription pipeline for the session
 
 ## Local Setup
 
@@ -47,15 +50,26 @@ Create a `.env` file in the project root with your ASR and LLM settings:
 # Backend app logging
 LTD_LOG_LEVEL=INFO
 
-# NeMo ASR runtime
-LTD_NEMO_MODEL_PATH=/absolute/path/to/parakeet-tdt-0.6b-v2.nemo
+# Default provider
+LTD_DEFAULT_ASR_PROVIDER=parakeet_unified
 
-# Recommended on this Mac: use the separate Python 3.12 NeMo env as a local sidecar
-LTD_NEMO_PYTHON_EXECUTABLE=/Users/habeeb/dev/repos/live-transcription-demo/.cache/nemo312/.venv/bin/python
+# Parakeet Unified runtime
+LTD_PARAKEET_MODEL_PATH=/absolute/path/to/parakeet-unified-en-0.6b.nemo
+LTD_PARAKEET_PYTHON_EXECUTABLE=/Users/habeeb/dev/repos/live-transcription-demo/.cache/nemo312/.venv/bin/python
+LTD_PARAKEET_MIN_AUDIO_SECS=1.6
+LTD_PARAKEET_DECODE_HOP_SECS=1.6
 
-# Buffered decode cadence for the pseudo-live local path
-LTD_NEMO_MIN_AUDIO_SECS=1.0
-LTD_NEMO_DECODE_HOP_SECS=8.0
+# Optional NeMo fallback
+LTD_NEMO_MODEL_PATH=
+LTD_NEMO_PYTHON_EXECUTABLE=
+
+# Backend-managed transcription defaults
+LTD_TRANSCRIPTION_LATENCY_PRESET=balanced
+LTD_TRANSCRIPTION_SEGMENTATION_POLICY=source_turns
+LTD_TRANSCRIPTION_COACHING_WINDOW_POLICY=finalized_turns
+LTD_TRANSCRIPTION_VAD_PROVIDER=silero_vad
+LTD_TRANSCRIPTION_VAD_THRESHOLD=0.5
+LTD_TRANSCRIPTION_VAD_MIN_SILENCE_MS=600
 
 # Required if your endpoint needs an API key (OpenAI, Anthropic, etc.)
 LTD_LLM_API_KEY=sk-your-key-here
@@ -76,12 +90,13 @@ Set `VITE_ENABLE_DEBUG_DRAWER=false` to remove debug access from the renderer.
 
 ## ASR Runtime Notes
 
-- The backend capture/session path is wired to a real `NeMo` provider now.
-- On this machine, the provider uses a buffered pseudo-live path rather than true low-latency streaming.
-- The backend process stays on the lighter app environment while spawning a persistent local `NeMo` sidecar via `LTD_NEMO_PYTHON_EXECUTABLE`.
-- The sidecar loads the model once per session/provider lifecycle instead of restoring it for every decode window.
-- If `LTD_NEMO_MODEL_PATH` is unset or points to the wrong file, session start will fail fast with a clear backend error.
-- The backend now logs session API requests, NeMo worker/model activity, per-source ASR transcription start/stop, decode activity, and outbound LLM calls at `INFO` level.
+- The backend now normalizes all ASR output into `transcript_turn` events before broadcasting.
+- `parakeet_unified` is the default provider, but the session runtime can swap to another provider without frontend changes.
+- The backend process stays on the lighter app environment while spawning a persistent local sidecar via `LTD_PARAKEET_PYTHON_EXECUTABLE`.
+- The sidecar loads the model once per provider lifecycle instead of restoring it for every decode window.
+- Session startup and live reconfiguration both accept the same normalized transcription config shape.
+- If `LTD_PARAKEET_MODEL_PATH` is unset or points to the wrong file, session start will fail fast with a provider-specific backend error.
+- The backend logs session API requests, provider startup, transcription reconfiguration, decode activity, and outbound LLM calls at `INFO` level.
 - If you want more or less verbosity, set `LTD_LOG_LEVEL` in `.env`.
 
 ## Running the App
@@ -115,23 +130,17 @@ backend/.venv/bin/pytest backend/tests -v
 corepack pnpm --dir desktop test -- run
 ```
 
-## NeMo Benchmark Gate
+## Benchmark Harness
 
-The buffered `parakeet-tdt-0.6b-v2` path was validated against a separate Python `3.12` probe env with newer `NeMo` utilities than the initial backend env.
+The repo keeps a provider-aware buffered benchmark harness in `backend/scripts/benchmark_nemo_streaming.py`.
 
 Run:
 
 ```bash
 .cache/nemo312/.venv/bin/python backend/scripts/benchmark_nemo_streaming.py \
-  --provider nemo \
+  --provider parakeet_unified \
   --model-path "$PARAKEET_MODEL_PATH" \
   --audio fixtures/audio/benchmark_call.wav
 ```
 
-Measured on this Mac:
-
-- `realtime_factor`: about `2.18`
-- `mean_partial_latency_ms`: about `5747`
-- `final_latency_ms`: about `17682`
-
-That means the local CPU path is functional but not good enough for true live production coaching on this machine. The app keeps `NeMo` as the default provider behind a stable contract so the runtime can be swapped later without rewriting the UI.
+The harness still uses NeMo's buffered utilities under the hood for both `nemo` and `parakeet_unified`, but the output is labeled by provider so you can compare runtime settings more honestly.

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { LiveScreen } from "../features/live/LiveScreen";
@@ -9,21 +9,27 @@ const stateWithTranscript: SessionState = {
   coachingPaused: false,
   transcript: [
     {
-      type: "transcript",
+      type: "transcript_turn",
+      turn_id: "turn-1",
+      revision: 1,
+      event: "finalized",
       role: "colleague",
       source: "microphone",
       text: "Thanks for calling.",
-      is_partial: false,
+      is_final: true,
       started_at: "2026-04-23T10:41:11Z",
       ended_at: "2026-04-23T10:41:13Z",
       confidence: 0.93,
     },
     {
-      type: "transcript",
+      type: "transcript_turn",
+      turn_id: "turn-2",
+      revision: 1,
+      event: "finalized",
       role: "customer",
       source: "blackhole",
       text: "I'm calling about a payment.",
-      is_partial: false,
+      is_final: true,
       started_at: "2026-04-23T10:41:14Z",
       ended_at: "2026-04-23T10:41:17Z",
       confidence: 0.9,
@@ -51,6 +57,21 @@ const stateWithTranscript: SessionState = {
     captureMode: "mic_plus_blackhole",
     persona: "colleague_contact",
     microphoneDeviceId: "Test Mic",
+    transcription: {
+      provider: "parakeet_unified",
+      latencyPreset: "balanced",
+      segmentation: {
+        policy: "source_turns",
+      },
+      coaching: {
+        windowPolicy: "finalized_turns",
+      },
+      vad: {
+        provider: "silero_vad",
+        threshold: 0.5,
+        minSilenceMs: 600,
+      },
+    },
   },
   summary: null,
 };
@@ -59,6 +80,7 @@ describe("LiveScreen", () => {
   it("renders transcript rows and pause/stop controls", () => {
     render(
       <LiveScreen
+        onApplyTranscription={vi.fn()}
         state={stateWithTranscript}
         onPauseCoaching={vi.fn()}
         onStopSession={vi.fn()}
@@ -69,5 +91,33 @@ describe("LiveScreen", () => {
     expect(screen.getByText(/customer audio/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /pause coaching/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /stop session/i })).toBeInTheDocument();
+  });
+
+  it("applies advanced transcription settings from the live debug drawer", () => {
+    const onApplyTranscription = vi.fn();
+
+    render(
+      <LiveScreen
+        onApplyTranscription={onApplyTranscription}
+        state={{
+          ...stateWithTranscript,
+          debugOpen: true,
+        }}
+        onPauseCoaching={vi.fn()}
+        onStopSession={vi.fn()}
+        onToggleDebug={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/transcription provider/i), {
+      target: { value: "nemo" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /apply transcription settings/i }));
+
+    expect(onApplyTranscription).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "nemo",
+      }),
+    );
   });
 });

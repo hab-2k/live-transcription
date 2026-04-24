@@ -1,7 +1,7 @@
-import type { TranscriptEvent } from "../../lib/types/session";
+import type { TranscriptTurnEvent } from "../../lib/types/session";
 
 type TranscriptPanelProps = {
-  transcript: TranscriptEvent[];
+  transcript: TranscriptTurnEvent[];
 };
 
 function formatClock(value: string): string {
@@ -14,7 +14,7 @@ function Lane({
   emptyCopy,
 }: {
   title: string;
-  rows: TranscriptEvent[];
+  rows: TranscriptTurnEvent[];
   emptyCopy: string;
 }) {
   return (
@@ -25,10 +25,10 @@ function Lane({
 
       <div className="lane-body">
         {rows.length === 0 ? <p className="lane-empty">{emptyCopy}</p> : null}
-        {rows.map((row, index) => (
+        {rows.map((row) => (
           <article
-            className={`transcript-row ${row.is_partial ? "transcript-row--partial" : ""}`}
-            key={`${row.started_at}-${row.text}-${index}`}
+            className={`transcript-row ${row.is_final ? "" : "transcript-row--partial"}`}
+            key={row.turn_id}
           >
             <time className="transcript-time" dateTime={row.started_at}>
               {formatClock(row.started_at)}

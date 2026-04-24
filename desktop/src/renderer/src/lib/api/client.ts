@@ -4,7 +4,9 @@ import type {
   RuleFlagEvent,
   SessionEvent,
   SessionStatusEvent,
+  TranscriptionConfig,
   TranscriptEvent,
+  TranscriptTurnEvent,
   VoiceActivityEvent,
 } from "../types/session";
 
@@ -13,6 +15,11 @@ type StartSessionResponse = {
 };
 
 type PauseCoachingResponse = {
+  status: string;
+  session_id: string;
+};
+
+type UpdateTranscriptionResponse = {
   status: string;
   session_id: string;
 };
@@ -55,6 +62,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function serializeTranscriptionConfig(config: TranscriptionConfig) {
+  return {
+    provider: config.provider,
+    latency_preset: config.latencyPreset,
+    segmentation: {
+      policy: config.segmentation.policy,
+    },
+    coaching: {
+      window_policy: config.coaching.windowPolicy,
+    },
+    vad: {
+      provider: config.vad.provider,
+      threshold: config.vad.threshold,
+      min_silence_ms: config.vad.minSilenceMs,
+    },
+  };
+}
+
 function isTranscriptEvent(value: Record<string, unknown>): value is TranscriptEvent {
   return (
     value["type"] === "transcript" &&
@@ -62,6 +87,24 @@ function isTranscriptEvent(value: Record<string, unknown>): value is TranscriptE
     typeof value["source"] === "string" &&
     typeof value["text"] === "string" &&
     typeof value["is_partial"] === "boolean" &&
+    typeof value["started_at"] === "string" &&
+    typeof value["ended_at"] === "string" &&
+    typeof value["confidence"] === "number"
+  );
+}
+
+function isTranscriptTurnEvent(value: Record<string, unknown>): value is TranscriptTurnEvent {
+  return (
+    value["type"] === "transcript_turn" &&
+    typeof value["turn_id"] === "string" &&
+    typeof value["revision"] === "number" &&
+    (value["event"] === "started" ||
+      value["event"] === "updated" ||
+      value["event"] === "finalized") &&
+    typeof value["role"] === "string" &&
+    typeof value["source"] === "string" &&
+    typeof value["text"] === "string" &&
+    typeof value["is_final"] === "boolean" &&
     typeof value["started_at"] === "string" &&
     typeof value["ended_at"] === "string" &&
     typeof value["confidence"] === "number"
@@ -107,6 +150,10 @@ export function parseSessionEvent(input: unknown): SessionEvent {
   }
 
   if (isTranscriptEvent(input)) {
+    return input;
+  }
+
+  if (isTranscriptTurnEvent(input)) {
     return input;
   }
 
@@ -175,7 +222,8 @@ export async function startSession(
       microphone_device_id: setup.microphoneDeviceId,
       persona: setup.persona,
       coaching_profile: "empathy",
-      asr_provider: "nemo",
+      asr_provider: setup.transcription.provider,
+      transcription: serializeTranscriptionConfig(setup.transcription),
     }),
   });
   return readJsonResponse<StartSessionResponse>(response);
@@ -192,6 +240,19 @@ export async function setCoachingPaused(
     body: JSON.stringify({ paused }),
   });
   return readJsonResponse<PauseCoachingResponse>(response);
+}
+
+export async function setTranscriptionConfig(
+  sessionId: string,
+  transcription: TranscriptionConfig,
+  baseUrl: string,
+): Promise<UpdateTranscriptionResponse> {
+  const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/transcription-config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(serializeTranscriptionConfig(transcription)),
+  });
+  return readJsonResponse<UpdateTranscriptionResponse>(response);
 }
 
 function normalizeSummary(summary: BackendSummary | null) {

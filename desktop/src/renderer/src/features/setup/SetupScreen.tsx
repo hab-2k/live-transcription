@@ -1,11 +1,18 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import { getBackendUrl } from "../../lib/api/client";
-import type { CaptureMode, Persona, SessionSetup } from "../../lib/state/sessionReducer";
+import {
+  createDefaultTranscriptionConfig,
+  type CaptureMode,
+  type Persona,
+  type SessionSetup,
+} from "../../lib/state/sessionReducer";
+import { TranscriptionSettingsFields } from "../transcription/TranscriptionSettingsFields";
 
 type AudioDevice = { id: string; label: string; kind: string };
 
 type SetupScreenProps = {
+  debugEnabled?: boolean;
   errorMessage?: string | null;
   isStarting?: boolean;
   onStart: (setup: SessionSetup) => void;
@@ -13,9 +20,17 @@ type SetupScreenProps = {
 
 const BACKEND_URL = getBackendUrl();
 
-export function SetupScreen({ errorMessage = null, isStarting = false, onStart }: SetupScreenProps) {
+export function SetupScreen({
+  debugEnabled = false,
+  errorMessage = null,
+  isStarting = false,
+  onStart,
+}: SetupScreenProps) {
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [loading, setLoading] = useState(true);
+  const [captureMode, setCaptureMode] = useState<CaptureMode>("mic_plus_blackhole");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [transcription, setTranscription] = useState(createDefaultTranscriptionConfig("mic_plus_blackhole"));
 
   useEffect(() => {
     fetch(`${BACKEND_URL}/api/devices`)
@@ -35,9 +50,10 @@ export function SetupScreen({ errorMessage = null, isStarting = false, onStart }
     const formData = new FormData(event.currentTarget);
 
     onStart({
-      captureMode: formData.get("capture_mode") as CaptureMode,
+      captureMode,
       persona: formData.get("persona") as Persona,
       microphoneDeviceId: String(formData.get("microphone_device_id") ?? ""),
+      transcription,
     });
   }
 
@@ -45,6 +61,18 @@ export function SetupScreen({ errorMessage = null, isStarting = false, onStart }
     <main className="setup-shell">
       <section className="setup-card">
         <p className="eyebrow">Live coaching demo</p>
+        {debugEnabled ? (
+          <button
+            aria-label={advancedOpen ? "Close advanced transcription" : "Advanced transcription"}
+            className="menu-button"
+            onClick={() => setAdvancedOpen((current) => !current)}
+            type="button"
+          >
+            <span />
+            <span />
+            <span />
+          </button>
+        ) : null}
         <h1>Start Session</h1>
         <p className="setup-copy">
           Configure the call session and choose the coaching persona. Model and endpoint settings
@@ -76,7 +104,22 @@ export function SetupScreen({ errorMessage = null, isStarting = false, onStart }
 
           <label className="field">
             <span>Capture Mode</span>
-            <select defaultValue="mic_plus_blackhole" name="capture_mode">
+            <select
+              name="capture_mode"
+              onChange={(event) => {
+                const nextCaptureMode = event.target.value as CaptureMode;
+                setCaptureMode(nextCaptureMode);
+                setTranscription((current) => ({
+                  ...current,
+                  segmentation: createDefaultTranscriptionConfig(nextCaptureMode).segmentation,
+                  vad: {
+                    ...current.vad,
+                    minSilenceMs: createDefaultTranscriptionConfig(nextCaptureMode).vad.minSilenceMs,
+                  },
+                }));
+              }}
+              value={captureMode}
+            >
               <option value="mic_only">Microphone only</option>
               <option value="mic_plus_blackhole">Microphone + BlackHole</option>
             </select>
@@ -89,6 +132,13 @@ export function SetupScreen({ errorMessage = null, isStarting = false, onStart }
               <option value="manager">Manager</option>
             </select>
           </label>
+          {debugEnabled && advancedOpen ? (
+            <section aria-label="Advanced transcription settings" className="debug-section">
+              <h2>Advanced transcription</h2>
+              <p>Developer controls for provider selection, segmentation, and Silero VAD tuning.</p>
+              <TranscriptionSettingsFields config={transcription} onChange={setTranscription} />
+            </section>
+          ) : null}
           <button className="primary-button" type="submit" disabled={loading || isStarting}>
             {isStarting ? "Starting..." : "Start session"}
           </button>

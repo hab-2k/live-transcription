@@ -18,7 +18,8 @@ describe("App", () => {
           ok: false,
           json: () =>
             Promise.resolve({
-              detail: "NeMo is not configured. Set LTD_NEMO_MODEL_PATH to the local .nemo file before starting a session.",
+              detail:
+                "Parakeet Unified is not configured. Set LTD_PARAKEET_MODEL_PATH (or LTD_NEMO_MODEL_PATH as a fallback) to the local model artifact before starting a session.",
             }),
         });
       }
@@ -53,7 +54,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /start session/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/nemo is not configured/i)).toBeInTheDocument();
+      expect(screen.getByText(/parakeet unified is not configured/i)).toBeInTheDocument();
     });
 
     expect(screen.getByRole("heading", { name: /start session/i })).toBeInTheDocument();

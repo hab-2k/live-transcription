@@ -41,9 +41,25 @@ def build_llm_client(config: SessionConfig) -> OpenAICompatibleClient:
         timeout=settings.llm_timeout,
     )
 
+
+def configured_provider_name(config: SessionConfig) -> str:
+    if config.transcription is not None:
+        return config.transcription.provider
+    return config.asr_provider
+
+
+def missing_model_detail(provider_name: str) -> str:
+    if provider_name == "parakeet_unified":
+        return (
+            "Parakeet Unified is not configured. Set LTD_PARAKEET_MODEL_PATH "
+            "(or LTD_NEMO_MODEL_PATH as a fallback) to the local model artifact before starting a session."
+        )
+
+    return "NeMo is not configured. Set LTD_NEMO_MODEL_PATH to the local .nemo file before starting a session."
+
 session_manager = SessionManager(
     capture_service=SoundDeviceCaptureService(),
-    provider=build_provider(provider_name=settings.default_asr_provider, settings=settings),
+    provider_factory=lambda provider_name: build_provider(provider_name=provider_name, settings=settings),
     broadcaster=broadcaster,
     device_service=device_service,
     diarizer=NoopDiarizer(),
@@ -64,23 +80,21 @@ def list_devices() -> list[dict[str, str]]:
 
 @router.post("/api/sessions", status_code=201)
 async def start_session(config: SessionConfig) -> dict[str, str]:
+    provider_name = configured_provider_name(config)
     logger.info(
         "start_session requested: capture_mode=%s persona=%s microphone=%s asr_provider=%s",
         config.capture_mode,
         config.persona,
         config.microphone_device_id,
-        config.asr_provider,
+        provider_name,
     )
     try:
         session_id = await session_manager.start_session(config)
     except FileNotFoundError as exc:
-        logger.warning("start_session failed: nemo model is not configured")
+        logger.warning("start_session failed: %s model is not configured", provider_name)
         raise HTTPException(
             status_code=503,
-            detail=(
-                "NeMo is not configured. Set LTD_NEMO_MODEL_PATH to the local .nemo file "
-                "before starting a session."
-            ),
+            detail=missing_model_detail(provider_name),
         ) from exc
     except ValueError as exc:
         logger.warning("start_session failed: %s", exc)

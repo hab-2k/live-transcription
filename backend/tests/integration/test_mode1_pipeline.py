@@ -8,7 +8,7 @@ from tests.fakes.fake_provider import FakeProvider
 
 
 @pytest.mark.asyncio
-async def test_mode1_session_emits_shared_transcript_events() -> None:
+async def test_mode1_session_emits_shared_transcript_turns() -> None:
     manager = SessionManager(
         capture_service=FakeCapture(),
         provider=FakeProvider(),
@@ -27,5 +27,5 @@ async def test_mode1_session_emits_shared_transcript_events() -> None:
 
     events = manager.list_events(session_id)
 
-    assert events[0].type == "transcript"
-    assert events[0].role == "shared"
+    assert any(event.type == "transcript_turn" and event.role == "shared" for event in events)
+    assert not any(event.type == "transcript" for event in events)

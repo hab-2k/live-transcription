@@ -7,6 +7,7 @@ import {
   connectSessionEvents,
   getBackendUrl,
   setCoachingPaused,
+  setTranscriptionConfig,
   startSession,
   stopSession,
 } from "./lib/api/client";
@@ -15,6 +16,7 @@ import {
   sessionReducer,
   type SessionSetup,
 } from "./lib/state/sessionReducer";
+import type { TranscriptionConfig } from "./lib/types/session";
 import "./styles/tokens.css";
 import "./styles/app.css";
 
@@ -81,6 +83,22 @@ export default function App() {
     }
   }, [state.coachingPaused]);
 
+  const handleApplyTranscription = useCallback(
+    async (transcription: TranscriptionConfig) => {
+      if (!sessionIdRef.current) {
+        return;
+      }
+
+      try {
+        await setTranscriptionConfig(sessionIdRef.current, transcription, BACKEND_URL);
+        dispatch({ type: "update_transcription_config", transcription });
+      } catch (err) {
+        console.error("Failed to update transcription settings:", err);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     return () => {
       disconnectRef.current?.();
@@ -88,7 +106,14 @@ export default function App() {
   }, []);
 
   if (state.status === "setup") {
-    return <SetupScreen errorMessage={startError} isStarting={starting} onStart={handleStart} />;
+    return (
+      <SetupScreen
+        debugEnabled={DEBUG_DRAWER_ENABLED}
+        errorMessage={startError}
+        isStarting={starting}
+        onStart={handleStart}
+      />
+    );
   }
 
   if (state.status === "ended" && state.summary !== null) {
@@ -97,6 +122,7 @@ export default function App() {
 
   return (
     <LiveScreen
+      onApplyTranscription={handleApplyTranscription}
       onPauseCoaching={handlePauseCoaching}
       onStopSession={handleStop}
       onToggleDebug={() => dispatch({ type: "toggle_debug" })}

@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app.api.routes.session import session_manager
 from app.main import app
 from app.services.audio.device_service import DeviceService, AudioDevice
 from tests.fakes.fake_capture import FakeCapture
@@ -133,6 +134,52 @@ def test_start_session_returns_service_unavailable_when_nemo_model_is_unconfigur
     assert "LTD_NEMO_MODEL_PATH" in response.json()["detail"]
 
 
+def test_start_session_returns_service_unavailable_when_parakeet_model_is_unconfigured() -> None:
+    class MissingModelProvider:
+        name = "parakeet_unified"
+
+        async def start(self, *, emit_update=None, emit_event=None) -> None:  # noqa: ANN001
+            raise FileNotFoundError("Parakeet model path does not exist or is not a file: <unset>")
+
+        async def push_audio(self, *, source: str, pcm, sample_rate: int) -> None:  # noqa: ANN001
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    client = TestClient(app)
+
+    with (
+        patch("app.api.routes.session.session_manager.capture_service", FakeCapture(frames=[])),
+        patch("app.api.routes.session.session_manager.device_service", fake_device_service),
+        patch("app.api.routes.session.session_manager.provider", MissingModelProvider()),
+    ):
+        response = client.post(
+            "/api/sessions",
+            json={
+                "capture_mode": "mic_only",
+                "microphone_device_id": "Built-in Microphone",
+                "persona": "colleague_contact",
+                "coaching_profile": "empathy",
+                "asr_provider": "parakeet_unified",
+                "transcription": {
+                    "provider": "parakeet_unified",
+                    "latency_preset": "balanced",
+                    "segmentation": {"policy": "fixed_lines"},
+                    "coaching": {"window_policy": "finalized_turns"},
+                    "vad": {
+                        "provider": "silero_vad",
+                        "threshold": 0.5,
+                        "min_silence_ms": 700,
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 503
+    assert "LTD_PARAKEET_MODEL_PATH" in response.json()["detail"]
+
+
 def test_session_websocket_accepts_connections() -> None:
     client = TestClient(app)
 
@@ -251,3 +298,62 @@ def test_transcription_config_route_restarts_only_transcription_pipeline() -> No
     assert reconfigure_response.status_code == 200
     assert provider.start_calls == 2
     assert provider.stop_calls == 1
+
+
+def test_start_session_uses_transcription_provider_selection() -> None:
+    class NamedProvider:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.start_calls = 0
+
+        async def start(self, *, emit_update=None, emit_event=None) -> None:  # noqa: ANN001
+            self.start_calls += 1
+
+        async def push_audio(self, *, source: str, pcm, sample_rate: int) -> None:  # noqa: ANN001
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    client = TestClient(app)
+    providers = {
+        "parakeet_unified": NamedProvider("parakeet_unified"),
+        "nemo": NamedProvider("nemo"),
+    }
+
+    with (
+        patch("app.api.routes.session.session_manager.capture_service", FakeCapture(frames=[])),
+        patch("app.api.routes.session.session_manager.device_service", fake_device_service),
+        patch("app.api.routes.session.session_manager.provider", None),
+        patch.object(
+            session_manager,
+            "provider_factory",
+            side_effect=lambda provider_name: providers[provider_name],
+            create=True,
+        ),
+    ):
+        response = client.post(
+            "/api/sessions",
+            json={
+                "capture_mode": "mic_only",
+                "microphone_device_id": "Built-in Microphone",
+                "persona": "colleague_contact",
+                "coaching_profile": "empathy",
+                "asr_provider": "nemo",
+                "transcription": {
+                    "provider": "parakeet_unified",
+                    "latency_preset": "balanced",
+                    "segmentation": {"policy": "source_turns"},
+                    "coaching": {"window_policy": "finalized_turns"},
+                    "vad": {
+                        "provider": "silero_vad",
+                        "threshold": 0.5,
+                        "min_silence_ms": 600,
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    assert providers["parakeet_unified"].start_calls == 1
+    assert providers["nemo"].start_calls == 0

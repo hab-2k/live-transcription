@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from app.contracts.events import CoachingNudgeEvent, RuleFlagEvent, SessionEvent, SessionStatusEvent, TranscriptEvent, VoiceActivityEvent
+from app.contracts.events import CoachingNudgeEvent, RuleFlagEvent, SessionEvent, SessionStatusEvent, TranscriptTurnEvent, VoiceActivityEvent
 from app.contracts.session import SessionConfig, TranscriptionConfig
 from app.services.audio.base import AudioFrame, CaptureService
 from app.services.audio.device_service import DeviceService
@@ -20,7 +20,8 @@ from app.services.diarization.base import Diarizer
 from app.services.events.broadcaster import EventBroadcaster
 from app.services.transcription.base import TranscriptChunk, TranscriptionProvider
 from app.services.transcription.provider_updates import ProviderTranscriptUpdate
-from app.services.transcription.normalizer import normalize_chunk, role_for_chunk
+from app.services.transcription.normalizer import role_for_chunk
+from app.services.transcription.runtime_controller import TranscriptionRuntimeController
 from app.services.transcription.timeline import TranscriptTimelineAssembler
 
 
@@ -31,6 +32,7 @@ class SessionRuntime:
     prompt_builder: PromptBuilder | None
     llm_client: OpenAICompatibleClient | None
     timeline: TranscriptTimelineAssembler
+    provider: TranscriptionProvider | None = None
     emit_update: Callable[[ProviderTranscriptUpdate], Awaitable[None]] | None = None
     emit_event: Callable[[TranscriptChunk], Awaitable[None]] | None = None
 
@@ -40,7 +42,8 @@ class SessionManager:
         self,
         *,
         capture_service: CaptureService,
-        provider: TranscriptionProvider,
+        provider: TranscriptionProvider | None = None,
+        provider_factory: Callable[[str], TranscriptionProvider] | None = None,
         broadcaster: EventBroadcaster,
         device_service: DeviceService | None = None,
         diarizer: Diarizer | None = None,
@@ -52,9 +55,11 @@ class SessionManager:
         nudge_service: NudgeService | None = None,
         summary_service: SummaryService | None = None,
         debug_store: DebugStore | None = None,
+        runtime_controller: TranscriptionRuntimeController | None = None,
     ) -> None:
         self.capture_service = capture_service
         self.provider = provider
+        self.provider_factory = provider_factory
         self.broadcaster = broadcaster
         self.device_service = device_service
         self.diarizer = diarizer
@@ -66,6 +71,7 @@ class SessionManager:
         self.nudge_service = nudge_service
         self.summary_service = summary_service
         self.debug_store = debug_store
+        self.runtime_controller = runtime_controller or TranscriptionRuntimeController()
         self._events: dict[str, list[SessionEvent]] = defaultdict(list)
         self._runtimes: dict[str, SessionRuntime] = {}
         self._summaries: dict[str, CallSummary] = {}
@@ -88,7 +94,18 @@ class SessionManager:
         )
 
         async def emit_event(chunk: TranscriptChunk) -> None:
-            await self._handle_transcript_chunk(session_id=session_id, config=config, chunk=chunk)
+            await self._handle_provider_update(
+                session_id=session_id,
+                update=ProviderTranscriptUpdate(
+                    stream_id=chunk.source,
+                    source=chunk.source,
+                    text=chunk.text,
+                    is_final=not chunk.is_partial,
+                    started_at=chunk.started_at,
+                    ended_at=chunk.ended_at,
+                    confidence=chunk.confidence,
+                ),
+            )
 
         async def emit_update(update: ProviderTranscriptUpdate) -> None:
             await self._handle_provider_update(session_id=session_id, update=update)
@@ -96,7 +113,13 @@ class SessionManager:
         self._runtimes[session_id].emit_event = emit_event
         self._runtimes[session_id].emit_update = emit_update
         self._active_session_id = session_id
-        await self._start_provider(runtime=self._runtimes[session_id])
+        self._runtimes[session_id].provider = await self.runtime_controller.start(
+            config=config,
+            provider=self.provider,
+            provider_factory=self.provider_factory,
+            emit_update=emit_update,
+            emit_event=emit_event,
+        )
         await self.capture_service.start(config=config, on_audio=self._handle_audio_frame)
         return session_id
 
@@ -105,16 +128,17 @@ class SessionManager:
         if runtime is None:
             return self._summaries.get(session_id)
 
+        await self.capture_service.stop()
+        await self.runtime_controller.stop(runtime.provider)
+
         if self.summary_service is not None:
             transcript = [
-                event.model_dump()
-                for event in self._events.get(session_id, [])
-                if getattr(event, "type", None) == "transcript"
+                turn.model_dump()
+                for turn in self._latest_turn_snapshots(session_id)
+                if turn.is_final
             ]
             self._summaries[session_id] = self.summary_service.build(transcript)
 
-        await self.capture_service.stop()
-        await self.provider.stop()
         if self._active_session_id == session_id:
             self._active_session_id = None
         del self._runtimes[session_id]
@@ -143,15 +167,15 @@ class SessionManager:
         if runtime is None:
             raise KeyError(session_id)
 
-        await self.provider.stop()
-        runtime.config = runtime.config.model_copy(
-            update={
-                "transcription": transcription,
-                "asr_provider": transcription.provider,
-            }
+        runtime.provider, runtime.config = await self.runtime_controller.reconfigure(
+            current_provider=runtime.provider,
+            current_config=runtime.config,
+            transcription=transcription,
+            provider=self.provider,
+            provider_factory=self.provider_factory,
+            emit_update=runtime.emit_update,
+            emit_event=runtime.emit_event,
         )
-
-        await self._start_provider(runtime=runtime)
 
         status = SessionStatusEvent(status="transcription_reconfigured", session_id=session_id)
         self._events[session_id].append(status)
@@ -159,25 +183,20 @@ class SessionManager:
         return status.status
 
     async def _handle_audio_frame(self, frame: AudioFrame) -> None:
-        await self.provider.push_audio(
+        if self._active_session_id is None:
+            return
+
+        runtime = self._runtimes.get(self._active_session_id)
+        if runtime is None or runtime.provider is None:
+            return
+
+        await runtime.provider.push_audio(
             source=frame.source,
             pcm=frame.pcm,
             sample_rate=frame.sample_rate,
         )
 
-        if self._active_session_id is not None:
-            await self._emit_voice_activity(self._active_session_id, frame)
-
-    async def _start_provider(self, *, runtime: SessionRuntime) -> None:
-        try:
-            await self.provider.start(
-                emit_update=runtime.emit_update,
-                emit_event=runtime.emit_event,
-            )
-        except TypeError:
-            if runtime.emit_event is None:
-                raise
-            await self.provider.start(emit_event=runtime.emit_event)
+        await self._emit_voice_activity(self._active_session_id, frame)
 
     async def _emit_voice_activity(self, session_id: str, frame: AudioFrame) -> None:
         try:
@@ -192,32 +211,6 @@ class SessionManager:
             active=rms >= self._vad_threshold,
         )
         await self.broadcaster.publish(session_id, event.model_dump())
-
-    async def _handle_transcript_chunk(
-        self,
-        *,
-        session_id: str,
-        config: SessionConfig,
-        chunk: TranscriptChunk,
-    ) -> None:
-        chunks = [chunk]
-        if config.diarization_enabled and self.diarizer is not None:
-            chunks = await self.diarizer.process(chunks)
-
-        for current_chunk in chunks:
-            event = normalize_chunk(
-                source=current_chunk.source,
-                role=role_for_chunk(chunk=current_chunk, capture_mode=config.capture_mode),
-                text=current_chunk.text,
-                is_partial=current_chunk.is_partial,
-                started_at=current_chunk.started_at,
-                ended_at=current_chunk.ended_at,
-                confidence=current_chunk.confidence,
-            )
-            self._events[session_id].append(event)
-            await self.broadcaster.publish(session_id, event.model_dump())
-            if not current_chunk.is_partial:
-                await self._maybe_emit_coaching_events(session_id=session_id, current_chunk=current_chunk)
 
     async def _handle_provider_update(
         self,
@@ -237,18 +230,35 @@ class SessionManager:
             ended_at=update.ended_at,
             confidence=update.confidence,
         )
+        if runtime.config.diarization_enabled and self.diarizer is not None:
+            diarized_chunks = await self.diarizer.process([chunk])
+            if diarized_chunks:
+                chunk = diarized_chunks[0]
+                update = ProviderTranscriptUpdate(
+                    stream_id=update.stream_id,
+                    source=chunk.source,
+                    text=chunk.text,
+                    is_final=not chunk.is_partial,
+                    started_at=chunk.started_at,
+                    ended_at=chunk.ended_at,
+                    confidence=chunk.confidence,
+                    sequence_number=update.sequence_number,
+                    metadata=update.metadata,
+                )
         role = role_for_chunk(chunk=chunk, capture_mode=runtime.config.capture_mode)
         turn_event = runtime.timeline.ingest(update, role=role)
         self._events[session_id].append(turn_event)
         await self.broadcaster.publish(session_id, turn_event.model_dump())
 
-        await self._handle_transcript_chunk(
-            session_id=session_id,
-            config=runtime.config,
-            chunk=chunk,
-        )
+        if turn_event.is_final:
+            await self._maybe_emit_coaching_events(session_id=session_id, current_turn=turn_event)
 
-    async def _maybe_emit_coaching_events(self, *, session_id: str, current_chunk: TranscriptChunk) -> None:
+    async def _maybe_emit_coaching_events(
+        self,
+        *,
+        session_id: str,
+        current_turn: TranscriptTurnEvent,
+    ) -> None:
         runtime = self._runtimes.get(session_id)
         if runtime is None or runtime.coaching_paused:
             return
@@ -256,11 +266,7 @@ class SessionManager:
         if not all([self.rule_engine, runtime.prompt_builder, runtime.llm_client, self.nudge_service]):
             return
 
-        transcript_window = [
-            event.model_dump()
-            for event in self._events[session_id]
-            if getattr(event, "type", None) == "transcript"
-        ][-6:]
+        transcript_window = [turn.model_dump() for turn in self._coaching_window(session_id, runtime=runtime)]
         rule_result = self.rule_engine.evaluate(transcript=transcript_window)
 
         for flag in rule_result.flags:
@@ -287,12 +293,38 @@ class SessionManager:
             nudge = CoachingNudgeEvent(
                 title=message.rstrip("."),
                 message=message,
-                timestamp=current_chunk.ended_at,
+                timestamp=current_turn.ended_at,
                 priority="normal",
-                source_turn_ids=[f"{session_id}:{len(transcript_window)}"],
+                source_turn_ids=[current_turn.turn_id],
             )
             self._events[session_id].append(nudge)
             await self.broadcaster.publish(session_id, nudge.model_dump())
+
+    def _latest_turn_snapshots(self, session_id: str) -> list[TranscriptTurnEvent]:
+        ordered_ids: list[str] = []
+        latest_by_id: dict[str, TranscriptTurnEvent] = {}
+
+        for event in self._events.get(session_id, []):
+            if not isinstance(event, TranscriptTurnEvent):
+                continue
+            if event.turn_id not in latest_by_id:
+                ordered_ids.append(event.turn_id)
+            current = latest_by_id.get(event.turn_id)
+            if current is None or event.revision > current.revision:
+                latest_by_id[event.turn_id] = event
+
+        return [latest_by_id[turn_id] for turn_id in ordered_ids]
+
+    def _coaching_window(self, session_id: str, *, runtime: SessionRuntime) -> list[TranscriptTurnEvent]:
+        turns = self._latest_turn_snapshots(session_id)
+        policy = (
+            runtime.config.transcription.coaching.window_policy
+            if runtime.config.transcription is not None
+            else "finalized_turns"
+        )
+        if policy == "recent_text":
+            return turns[-6:]
+        return [turn for turn in turns if turn.is_final][-6:]
 
     def _flag_already_present(self, *, session_id: str, code: str) -> bool:
         return any(
