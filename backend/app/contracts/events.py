@@ -14,6 +14,20 @@ class TranscriptEvent(BaseModel):
     confidence: float
 
 
+class TranscriptTurnEvent(BaseModel):
+    type: Literal["transcript_turn"] = "transcript_turn"
+    turn_id: str
+    revision: int
+    event: Literal["started", "updated", "finalized"]
+    role: Literal["colleague", "customer", "shared", "unknown"]
+    source: Literal["microphone", "blackhole", "mixed"]
+    text: str
+    is_final: bool
+    started_at: str
+    ended_at: str
+    confidence: float
+
+
 class CoachingNudgeEvent(BaseModel):
     type: Literal["coaching_nudge"] = "coaching_nudge"
     title: str
@@ -43,4 +57,11 @@ class VoiceActivityEvent(BaseModel):
     active: bool
 
 
-SessionEvent = TranscriptEvent | CoachingNudgeEvent | RuleFlagEvent | SessionStatusEvent | VoiceActivityEvent
+SessionEvent = (
+    TranscriptEvent
+    | TranscriptTurnEvent
+    | CoachingNudgeEvent
+    | RuleFlagEvent
+    | SessionStatusEvent
+    | VoiceActivityEvent
+)

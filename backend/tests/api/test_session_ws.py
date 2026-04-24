@@ -36,6 +36,46 @@ def test_start_session_returns_session_id() -> None:
     assert "session_id" in response.json()
 
 
+def test_start_session_passes_nested_transcription_config_to_session_manager() -> None:
+    client = TestClient(app)
+    captured: dict[str, object] = {}
+
+    async def fake_start_session(config) -> str:  # noqa: ANN001
+        captured.update(config.model_dump())
+        return "session-123"
+
+    with (
+        patch("app.api.routes.session.session_manager.capture_service", FakeCapture(frames=[])),
+        patch("app.api.routes.session.session_manager.device_service", fake_device_service),
+        patch("app.api.routes.session.session_manager.provider", FakeProvider()),
+        patch("app.api.routes.session.session_manager.start_session", side_effect=fake_start_session),
+    ):
+        response = client.post(
+            "/api/sessions",
+            json={
+                "capture_mode": "mic_only",
+                "microphone_device_id": "Built-in Microphone",
+                "persona": "colleague_contact",
+                "coaching_profile": "empathy",
+                "asr_provider": "parakeet_unified",
+                "transcription": {
+                    "provider": "parakeet_unified",
+                    "latency_preset": "balanced",
+                    "segmentation": {"policy": "source_turns"},
+                    "coaching": {"window_policy": "finalized_turns"},
+                    "vad": {
+                        "provider": "silero_vad",
+                        "threshold": 0.5,
+                        "min_silence_ms": 600,
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    assert captured.get("transcription", {}).get("provider") == "parakeet_unified"
+
+
 def test_start_session_logs_request_details(caplog) -> None:  # noqa: ANN001
     client = TestClient(app)
     caplog.set_level(logging.INFO)

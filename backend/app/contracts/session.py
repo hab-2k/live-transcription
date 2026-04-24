@@ -3,12 +3,35 @@ from typing import Literal
 from pydantic import BaseModel
 
 
+class TranscriptionSegmentationConfig(BaseModel):
+    policy: str
+
+
+class TranscriptionCoachingConfig(BaseModel):
+    window_policy: str
+
+
+class TranscriptionVadConfig(BaseModel):
+    provider: str
+    threshold: float
+    min_silence_ms: int
+
+
+class TranscriptionConfig(BaseModel):
+    provider: str
+    latency_preset: str
+    segmentation: TranscriptionSegmentationConfig
+    coaching: TranscriptionCoachingConfig
+    vad: TranscriptionVadConfig
+
+
 class SessionConfig(BaseModel):
     capture_mode: Literal["mic_only", "mic_plus_blackhole"]
     microphone_device_id: str
     persona: str
     coaching_profile: str
     asr_provider: str
+    transcription: TranscriptionConfig | None = None
     diarization_enabled: bool = False
     llm_base_url: str | None = None
     llm_model: str | None = None

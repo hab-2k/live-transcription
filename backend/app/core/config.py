@@ -6,6 +6,12 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     default_asr_provider: str = "nemo"
+    transcription_latency_preset: str = "balanced"
+    transcription_segmentation_policy: str = "source_turns"
+    transcription_coaching_window_policy: str = "finalized_turns"
+    transcription_vad_provider: str = "silero_vad"
+    transcription_vad_threshold: float = 0.5
+    transcription_vad_min_silence_ms: int = 600
     nemo_model_path: str = ""
     nemo_python_executable: str = ""
     nemo_min_audio_secs: float = 1.6
