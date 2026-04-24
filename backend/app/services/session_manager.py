@@ -3,11 +3,11 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from app.contracts.events import CoachingNudgeEvent, RuleFlagEvent, SessionEvent, SessionStatusEvent, TranscriptEvent, VoiceActivityEvent
-from app.contracts.session import SessionConfig
+from app.contracts.session import SessionConfig, TranscriptionConfig
 from app.services.audio.base import AudioFrame, CaptureService
 from app.services.audio.device_service import DeviceService
 from app.services.coaching.llm_client import OpenAICompatibleClient
@@ -19,7 +19,9 @@ from app.services.debug.debug_store import DebugStore
 from app.services.diarization.base import Diarizer
 from app.services.events.broadcaster import EventBroadcaster
 from app.services.transcription.base import TranscriptChunk, TranscriptionProvider
+from app.services.transcription.provider_updates import ProviderTranscriptUpdate
 from app.services.transcription.normalizer import normalize_chunk, role_for_chunk
+from app.services.transcription.timeline import TranscriptTimelineAssembler
 
 
 @dataclass(slots=True)
@@ -28,6 +30,9 @@ class SessionRuntime:
     coaching_paused: bool
     prompt_builder: PromptBuilder | None
     llm_client: OpenAICompatibleClient | None
+    timeline: TranscriptTimelineAssembler
+    emit_update: Callable[[ProviderTranscriptUpdate], Awaitable[None]] | None = None
+    emit_event: Callable[[TranscriptChunk], Awaitable[None]] | None = None
 
 
 class SessionManager:
@@ -79,13 +84,19 @@ class SessionManager:
             coaching_paused=False,
             prompt_builder=self._create_prompt_builder(config),
             llm_client=self._create_llm_client(config),
+            timeline=TranscriptTimelineAssembler(),
         )
 
         async def emit_event(chunk: TranscriptChunk) -> None:
             await self._handle_transcript_chunk(session_id=session_id, config=config, chunk=chunk)
 
+        async def emit_update(update: ProviderTranscriptUpdate) -> None:
+            await self._handle_provider_update(session_id=session_id, update=update)
+
+        self._runtimes[session_id].emit_event = emit_event
+        self._runtimes[session_id].emit_update = emit_update
         self._active_session_id = session_id
-        await self.provider.start(emit_event=emit_event)
+        await self._start_provider(runtime=self._runtimes[session_id])
         await self.capture_service.start(config=config, on_audio=self._handle_audio_frame)
         return session_id
 
@@ -127,6 +138,26 @@ class SessionManager:
         await self.broadcaster.publish(session_id, event.model_dump())
         return status
 
+    async def set_transcription_config(self, session_id: str, transcription: TranscriptionConfig) -> str:
+        runtime = self._runtimes.get(session_id)
+        if runtime is None:
+            raise KeyError(session_id)
+
+        await self.provider.stop()
+        runtime.config = runtime.config.model_copy(
+            update={
+                "transcription": transcription,
+                "asr_provider": transcription.provider,
+            }
+        )
+
+        await self._start_provider(runtime=runtime)
+
+        status = SessionStatusEvent(status="transcription_reconfigured", session_id=session_id)
+        self._events[session_id].append(status)
+        await self.broadcaster.publish(session_id, status.model_dump())
+        return status.status
+
     async def _handle_audio_frame(self, frame: AudioFrame) -> None:
         await self.provider.push_audio(
             source=frame.source,
@@ -136,6 +167,17 @@ class SessionManager:
 
         if self._active_session_id is not None:
             await self._emit_voice_activity(self._active_session_id, frame)
+
+    async def _start_provider(self, *, runtime: SessionRuntime) -> None:
+        try:
+            await self.provider.start(
+                emit_update=runtime.emit_update,
+                emit_event=runtime.emit_event,
+            )
+        except TypeError:
+            if runtime.emit_event is None:
+                raise
+            await self.provider.start(emit_event=runtime.emit_event)
 
     async def _emit_voice_activity(self, session_id: str, frame: AudioFrame) -> None:
         try:
@@ -176,6 +218,35 @@ class SessionManager:
             await self.broadcaster.publish(session_id, event.model_dump())
             if not current_chunk.is_partial:
                 await self._maybe_emit_coaching_events(session_id=session_id, current_chunk=current_chunk)
+
+    async def _handle_provider_update(
+        self,
+        *,
+        session_id: str,
+        update: ProviderTranscriptUpdate,
+    ) -> None:
+        runtime = self._runtimes.get(session_id)
+        if runtime is None:
+            return
+
+        chunk = TranscriptChunk(
+            source=update.source,
+            text=update.text,
+            is_partial=not update.is_final,
+            started_at=update.started_at,
+            ended_at=update.ended_at,
+            confidence=update.confidence,
+        )
+        role = role_for_chunk(chunk=chunk, capture_mode=runtime.config.capture_mode)
+        turn_event = runtime.timeline.ingest(update, role=role)
+        self._events[session_id].append(turn_event)
+        await self.broadcaster.publish(session_id, turn_event.model_dump())
+
+        await self._handle_transcript_chunk(
+            session_id=session_id,
+            config=runtime.config,
+            chunk=chunk,
+        )
 
     async def _maybe_emit_coaching_events(self, *, session_id: str, current_chunk: TranscriptChunk) -> None:
         runtime = self._runtimes.get(session_id)

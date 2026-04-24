@@ -194,3 +194,60 @@ def test_pause_coaching_route_returns_session_state() -> None:
 
     assert pause_response.status_code == 200
     assert pause_response.json() == {"status": "coaching_paused", "session_id": session_id}
+
+
+def test_transcription_config_route_restarts_only_transcription_pipeline() -> None:
+    class RestartableProvider:
+        name = "fake"
+
+        def __init__(self) -> None:
+            self.start_calls = 0
+            self.stop_calls = 0
+
+        async def start(self, *, emit_update=None, emit_event=None) -> None:  # noqa: ANN001
+            self.start_calls += 1
+
+        async def push_audio(self, *, source: str, pcm, sample_rate: int) -> None:  # noqa: ANN001
+            return None
+
+        async def stop(self) -> None:
+            self.stop_calls += 1
+
+    client = TestClient(app)
+    provider = RestartableProvider()
+
+    with (
+        patch("app.api.routes.session.session_manager.capture_service", FakeCapture(frames=[])),
+        patch("app.api.routes.session.session_manager.device_service", fake_device_service),
+        patch("app.api.routes.session.session_manager.provider", provider),
+    ):
+        start_response = client.post(
+            "/api/sessions",
+            json={
+                "capture_mode": "mic_only",
+                "microphone_device_id": "Built-in Microphone",
+                "persona": "colleague_contact",
+                "coaching_profile": "empathy",
+                "asr_provider": "parakeet_unified",
+            },
+        )
+        session_id = start_response.json()["session_id"]
+
+        reconfigure_response = client.post(
+            f"/api/sessions/{session_id}/transcription-config",
+            json={
+                "provider": "parakeet_unified",
+                "latency_preset": "balanced",
+                "segmentation": {"policy": "source_turns"},
+                "coaching": {"window_policy": "finalized_turns"},
+                "vad": {
+                    "provider": "silero_vad",
+                    "threshold": 0.5,
+                    "min_silence_ms": 600,
+                },
+            },
+        )
+
+    assert reconfigure_response.status_code == 200
+    assert provider.start_calls == 2
+    assert provider.stop_calls == 1

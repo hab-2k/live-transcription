@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, WebSocket
 
 from app.core.config import settings
-from app.contracts.session import CoachingPauseRequest, SessionConfig
+from app.contracts.session import CoachingPauseRequest, SessionConfig, TranscriptionConfig
 from app.services.audio.device_service import DeviceService
 from app.services.audio.sounddevice_capture import SoundDeviceCaptureService
 from app.services.coaching.llm_client import OpenAICompatibleClient
@@ -99,6 +99,23 @@ async def pause_coaching(session_id: str, request: CoachingPauseRequest) -> dict
         raise HTTPException(status_code=404, detail="Unknown session") from exc
 
     logger.info("pause_coaching completed: session_id=%s status=%s", session_id, status)
+    return {"status": status, "session_id": session_id}
+
+
+@router.post("/api/sessions/{session_id}/transcription-config")
+async def update_transcription_config(session_id: str, config: TranscriptionConfig) -> dict[str, str]:
+    logger.info(
+        "update_transcription_config requested: session_id=%s provider=%s latency_preset=%s",
+        session_id,
+        config.provider,
+        config.latency_preset,
+    )
+    try:
+        status = await session_manager.set_transcription_config(session_id, config)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown session") from exc
+
+    logger.info("update_transcription_config completed: session_id=%s status=%s", session_id, status)
     return {"status": status, "session_id": session_id}
 
 
