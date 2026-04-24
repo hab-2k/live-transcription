@@ -228,14 +228,14 @@ The orchestrator, not the provider, decides when a provider update should:
 
 The backend should include a lightweight VAD service used for segmentation hints and finalization decisions.
 
+The initial implementation should use `silero-vad`, wrapped behind a backend-owned interface so the orchestration layer depends on normalized speech-activity signals rather than on `silero-vad` directly.
+
 Initial expectations:
 
 - low overhead
 - local execution
 - per-source activity state
 - configurable sensitivity and hangover timing
-
-The first implementation does not need a heavy ML VAD. It may extend the existing RMS/activity logic into a more explicit silence detector with debounce and hold timings, provided the contract stays backend-owned and replaceable.
 
 VAD is a segmentation input, not a provider requirement.
 
