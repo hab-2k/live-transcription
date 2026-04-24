@@ -1,7 +1,8 @@
 from typing import Literal
 
-from app.contracts.events import TranscriptEvent
+from app.contracts.events import TranscriptEvent, TranscriptTurnEvent
 from app.services.transcription.base import TranscriptChunk
+from app.services.transcription.provider_updates import ProviderTranscriptUpdate
 
 
 def role_for_chunk(*, chunk: TranscriptChunk, capture_mode: Literal["mic_only", "mic_plus_blackhole"]) -> str:
@@ -36,4 +37,27 @@ def normalize_chunk(
         started_at=started_at,
         ended_at=ended_at,
         confidence=confidence,
+    )
+
+
+def normalize_turn_event(
+    *,
+    turn_id: str,
+    revision: int,
+    event: Literal["started", "updated", "finalized"],
+    role: str,
+    update: ProviderTranscriptUpdate,
+) -> TranscriptTurnEvent:
+    return TranscriptTurnEvent(
+        type="transcript_turn",
+        turn_id=turn_id,
+        revision=revision,
+        event=event,
+        source=update.source,
+        role=role,
+        text=update.text,
+        is_final=update.is_final,
+        started_at=update.started_at,
+        ended_at=update.ended_at,
+        confidence=update.confidence,
     )
