@@ -1,121 +1,98 @@
 from __future__ import annotations
 
 import argparse
-import copy
+import base64
 import json
 import logging
-import math
 import sys
-import time
-from contextlib import redirect_stdout
 from pathlib import Path
 
+import numpy as np
 
-DEFAULT_CHUNK_LEN_SECS = 1.6
-DEFAULT_TOTAL_BUFFER_SECS = 4.0
-DEFAULT_MAX_STEPS_PER_TIMESTEP = 5
-
-
-class BufferedParakeetUnifiedRuntime:
-    def __init__(self, *, model_path: Path) -> None:
-        import torch
-        from omegaconf import OmegaConf, open_dict
-
-        from nemo.collections.asr.models import ASRModel
-        from nemo.collections.asr.parts.submodules.rnnt_decoding import RNNTDecodingConfig
-
-        self._model_path = model_path
-        self._map_location = torch.device("cpu")
-        self._asr_model = ASRModel.restore_from(str(model_path), map_location=self._map_location)
-        self._model_cfg = copy.deepcopy(self._asr_model._cfg)
-
-        OmegaConf.set_struct(self._model_cfg.preprocessor, False)
-        self._model_cfg.preprocessor.dither = 0.0
-        self._model_cfg.preprocessor.pad_to = 0
-        OmegaConf.set_struct(self._model_cfg.preprocessor, True)
-
-        self._asr_model.freeze()
-        self._asr_model = self._asr_model.to(self._map_location)
-
-        self._decoding_cfg = OmegaConf.create(
-            {
-                "decoding": OmegaConf.structured(RNNTDecodingConfig()),
-                "stateful_decoding": True,
-                "batch_size": 1,
-                "chunk_len_in_secs": DEFAULT_CHUNK_LEN_SECS,
-                "total_buffer_in_secs": DEFAULT_TOTAL_BUFFER_SECS,
-                "max_steps_per_timestep": DEFAULT_MAX_STEPS_PER_TIMESTEP,
-            }
-        )
-        with open_dict(self._decoding_cfg.decoding):
-            self._decoding_cfg.decoding.strategy = "greedy"
-            self._decoding_cfg.decoding.preserve_alignments = True
-            self._decoding_cfg.decoding.fused_batch_size = -1
-            self._decoding_cfg.decoding.beam.return_best_hypothesis = True
-
-        self._asr_model.change_decoding_strategy(self._decoding_cfg.decoding)
-
-        feature_stride = self._model_cfg.preprocessor["window_stride"]
-        self._model_stride_in_secs = feature_stride * self._asr_model.encoder.subsampling_factor
-        self._tokens_per_chunk = math.ceil(self._decoding_cfg.chunk_len_in_secs / self._model_stride_in_secs)
-        self._mid_delay = math.ceil(
-            (
-                self._decoding_cfg.chunk_len_in_secs
-                + (self._decoding_cfg.total_buffer_in_secs - self._decoding_cfg.chunk_len_in_secs) / 2
-            )
-            / self._model_stride_in_secs
-        )
-
-    def decode(self, *, audio_path: Path) -> dict[str, object]:
-        import soundfile as sf
-
-        from nemo.collections.asr.parts.utils.streaming_utils import BatchedFrameASRRNNT
-        from nemo.collections.asr.parts.utils.transcribe_utils import get_buffered_pred_feat_rnnt
-
-        audio_info = sf.info(str(audio_path))
-        frame_asr = BatchedFrameASRRNNT(
-            asr_model=self._asr_model,
-            frame_len=self._decoding_cfg.chunk_len_in_secs,
-            total_buffer=self._decoding_cfg.total_buffer_in_secs,
-            batch_size=self._decoding_cfg.batch_size,
-            max_steps_per_timestep=self._decoding_cfg.max_steps_per_timestep,
-            stateful_decoding=self._decoding_cfg.stateful_decoding,
-        )
-
-        started_at = time.perf_counter()
-        hyps = get_buffered_pred_feat_rnnt(
-            asr=frame_asr,
-            tokens_per_chunk=self._tokens_per_chunk,
-            delay=self._mid_delay,
-            model_stride_in_secs=self._model_stride_in_secs,
-            batch_size=self._decoding_cfg.batch_size,
-            manifest=None,
-            filepaths=[str(audio_path)],
-            accelerator="cpu",
-        )
-        elapsed_secs = time.perf_counter() - started_at
-
-        return {
-            "transcript": hyps[0].text if hyps else "",
-            "confidence": 0.0,
-            "audio_duration_secs": round(audio_info.frames / audio_info.samplerate, 3),
-            "elapsed_secs": round(elapsed_secs, 3),
-        }
+logger = logging.getLogger("parakeet-worker")
 
 
-def emit(payload: dict[str, object]) -> None:
+def emit(payload: dict) -> None:
     sys.stdout.write(json.dumps(payload) + "\n")
     sys.stdout.flush()
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model-path", required=True)
-    return parser.parse_args()
+def _extract_increment(previous: str, current: str) -> str:
+    prev_words = previous.split()
+    curr_words = current.split()
+    shared = 0
+    for p, c in zip(prev_words, curr_words):
+        if p != c:
+            break
+        shared += 1
+    return " ".join(curr_words[shared:]).strip()
+
+
+class StreamingSession:
+    """
+    Wraps a single live streaming session using NeMo's cache-aware streaming API.
+    The model and its weights are shared; only the streaming state is per-session.
+    """
+
+    def __init__(self, wrapper, asr_model) -> None:
+        from nemo.collections.asr.inference.utils.context_manager import CacheAwareContext
+        from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer
+
+        self._wrapper = wrapper
+        self._streaming_buffer = CacheAwareStreamingAudioBuffer(model=asr_model)
+        self._context = CacheAwareContext()
+        self._previous_hypotheses = None
+        self._step_num = 0
+        self._stream_id: int | None = None
+        self._full_text = ""
+
+    def push_audio(self, samples: np.ndarray) -> str:
+        """Append raw float32 samples. Returns any new text produced."""
+        if self._stream_id is None:
+            _, _, self._stream_id = self._streaming_buffer.append_audio(samples, stream_id=-1)
+        else:
+            self._streaming_buffer.append_audio(samples, stream_id=self._stream_id)
+        return self._drain(is_final=False)
+
+    def finalize(self) -> str:
+        """Flush remaining audio. Returns any final text produced."""
+        if self._streaming_buffer.buffer is None:
+            return ""
+        return self._drain(is_final=True)
+
+    def _drain(self, is_final: bool) -> str:
+        drop_extra = self._wrapper.drop_extra_pre_encoded
+        parts: list[str] = []
+
+        for chunk_audio, chunk_lengths in iter(self._streaming_buffer):
+            is_last = self._streaming_buffer.is_buffer_empty()
+            keep_all = is_final and is_last
+            drop = drop_extra if self._step_num != 0 else 0
+
+            best_hyp, self._context = self._wrapper.stream_step(
+                processed_signal=chunk_audio,
+                processed_signal_length=chunk_lengths,
+                context=self._context,
+                previous_hypotheses=self._previous_hypotheses,
+                drop_extra_pre_encoded=drop,
+                keep_all_outputs=keep_all,
+            )
+            self._previous_hypotheses = best_hyp
+            self._step_num += 1
+
+            new_full = best_hyp[0].text if best_hyp else ""
+            delta = _extract_increment(self._full_text, new_full)
+            if delta:
+                self._full_text = new_full
+                parts.append(delta)
+
+        return " ".join(parts)
 
 
 def main() -> int:
-    args = parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-path", required=True)
+    args = parser.parse_args()
     model_path = Path(args.model_path)
 
     logging.basicConfig(
@@ -124,17 +101,31 @@ def main() -> int:
     )
 
     if not model_path.exists():
-        logging.error("Parakeet model path does not exist: %s", model_path)
+        logger.error("Model path not found: %s", model_path)
         return 1
 
     try:
-        runtime = BufferedParakeetUnifiedRuntime(model_path=model_path)
+        from nemo.collections.asr.inference.model_wrappers.cache_aware_rnnt_inference_wrapper import (
+            CacheAwareRNNTInferenceWrapper,
+        )
+        from nemo.collections.asr.parts.submodules.rnnt_decoding import RNNTDecodingConfig
+
+        wrapper = CacheAwareRNNTInferenceWrapper(
+            model_name=str(model_path),
+            decoding_cfg=RNNTDecodingConfig(),
+            device="cpu",
+            compute_dtype="float32",
+            use_amp=False,
+        )
+        asr_model = wrapper.asr_model
     except Exception:
-        logging.exception("Failed to load Parakeet Unified model")
+        logger.exception("Failed to load model")
         return 1
 
-    logging.info("Parakeet Unified model loaded: %s", model_path)
+    logger.info("Model loaded: %s", model_path)
     emit({"type": "ready", "model_path": str(model_path)})
+
+    session: StreamingSession | None = None
 
     for raw_line in sys.stdin:
         line = raw_line.strip()
@@ -144,46 +135,55 @@ def main() -> int:
         try:
             request = json.loads(line)
         except json.JSONDecodeError:
-            logging.error("Received invalid JSON request")
+            logger.error("Invalid JSON on stdin")
             continue
 
-        request_type = request.get("type")
-        if request_type == "shutdown":
-            logging.info("Shutdown requested")
+        req_type = request.get("type")
+
+        if req_type == "shutdown":
+            logger.info("Shutdown requested")
             return 0
 
-        if request_type != "decode":
-            emit(
-                {
-                    "type": "decode_result",
-                    "ok": False,
-                    "error": f"Unsupported request type: {request_type}",
-                }
-            )
+        if req_type == "reset":
+            session = StreamingSession(wrapper, asr_model)
+            emit({"type": "reset_ok"})
             continue
 
-        audio_path = Path(str(request.get("audio_path", "")))
-        try:
-            with redirect_stdout(sys.stderr):
-                result = runtime.decode(audio_path=audio_path)
-        except Exception:
-            logging.exception("Decode failed for %s", audio_path)
-            emit(
-                {
-                    "type": "decode_result",
-                    "ok": False,
-                    "error": f"Decode failed for {audio_path}",
-                }
-            )
+        if req_type == "push_chunk":
+            if session is None:
+                session = StreamingSession(wrapper, asr_model)
+
+            raw_bytes = base64.b64decode(request.get("audio_b64", ""))
+            samples = np.frombuffer(raw_bytes, dtype=np.float32).copy()
+
+            try:
+                delta = session.push_audio(samples)
+            except Exception:
+                logger.exception("push_audio failed")
+                emit({"type": "chunk_result", "ok": False, "error": "push_audio failed"})
+                continue
+
+            emit({"type": "chunk_result", "ok": True, "text": delta})
             continue
 
-        emit(
-            {
-                "type": "decode_result",
-                "ok": True,
-                **result,
-            }
-        )
+        if req_type == "finalize":
+            if session is None:
+                emit({"type": "finalize_result", "ok": True, "text": ""})
+                continue
+
+            try:
+                delta = session.finalize()
+            except Exception:
+                logger.exception("finalize failed")
+                emit({"type": "finalize_result", "ok": False, "error": "finalize failed"})
+                session = None
+                continue
+
+            session = None
+            emit({"type": "finalize_result", "ok": True, "text": delta})
+            continue
+
+        emit({"type": "error", "error": f"Unknown request type: {req_type!r}"})
 
     return 0
 
