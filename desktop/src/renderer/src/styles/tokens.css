@@ -1,0 +1,41 @@
+:root {
+  --bg-top: #f7faf4;
+  --bg-bottom: #e8f1e5;
+  --surface: rgba(255, 255, 255, 0.94);
+  --surface-strong: #ffffff;
+  --surface-tint: #edf4eb;
+  --border: rgba(9, 44, 26, 0.12);
+  --text: #0e1711;
+  --muted: #55645b;
+  --green: #0a6c3f;
+  --green-deep: #08452b;
+  --green-soft: #dbead8;
+  --black: #0b0f0c;
+  --shadow: 0 20px 55px rgba(10, 39, 21, 0.08);
+  --radius-xl: 28px;
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --font-ui: "Avenir Next", "Trebuchet MS", sans-serif;
+  --font-display: "Iowan Old Style", "Palatino Linotype", serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(34, 120, 70, 0.12), transparent 28rem),
+    linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}

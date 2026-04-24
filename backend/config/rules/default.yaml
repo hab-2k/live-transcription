@@ -1,0 +1,10 @@
+missing_ownership:
+  customer_keywords:
+    - worried
+    - concerned
+    - upset
+  ownership_keywords:
+    - i will
+    - i'll
+    - i can
+  message: State ownership and confirm the next step clearly.
