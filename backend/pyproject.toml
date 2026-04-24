@@ -14,6 +14,7 @@ dependencies = [
   "pydantic>=2.9,<3",
   "pydantic-settings>=2.6,<3",
   "pyyaml>=6,<7",
+  "silero-vad>=5,<7",
   "sounddevice>=0.5,<1",
   "uvicorn>=0.32,<1",
 ]
