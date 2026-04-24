@@ -16,6 +16,7 @@ from typing import Any, Callable, Protocol
 import numpy as np
 
 from app.services.transcription.base import EventSink, TranscriptChunk
+from app.services.transcription.provider_updates import ProviderTranscriptUpdate, UpdateSink
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,7 @@ class NemoStreamingProvider:
     def __init__(self, settings: Any, worker_client_factory: WorkerClientFactory | None = None) -> None:
         self.settings = settings
         self._emit_event: EventSink | None = None
+        self._emit_update: UpdateSink | None = None
         self._model_path_raw = str(getattr(settings, "nemo_model_path", "")).strip()
         self._model_path = Path(self._model_path_raw) if self._model_path_raw else None
         self._python_executable = getattr(settings, "nemo_python_executable", "") or sys.executable
@@ -209,7 +211,12 @@ class NemoStreamingProvider:
         self._buffers: dict[str, SourceBuffer] = {}
         self._lock = asyncio.Lock()
 
-    async def start(self, *, emit_event: EventSink) -> None:
+    async def start(
+        self,
+        *,
+        emit_update: UpdateSink | None = None,
+        emit_event: EventSink | None = None,
+    ) -> None:
         if self._model_path is None or not self._model_path.is_file():
             raise FileNotFoundError(
                 f"NeMo model path does not exist or is not a file: {self._model_path_raw or '<unset>'}"
@@ -223,6 +230,7 @@ class NemoStreamingProvider:
             self._decode_hop_secs,
         )
         self._emit_event = emit_event
+        self._emit_update = emit_update
         self._buffers.clear()
         self._worker_client = self._worker_client_factory(
             model_path=self._model_path,
@@ -233,6 +241,7 @@ class NemoStreamingProvider:
             await self._worker_client.start()
         except Exception:
             self._emit_event = None
+            self._emit_update = None
             self._worker_client = None
             raise
 
@@ -244,7 +253,7 @@ class NemoStreamingProvider:
         logger.info("nemo provider ready")
 
     async def push_audio(self, *, source: str, pcm: Any, sample_rate: int) -> None:
-        if self._emit_event is None:
+        if self._emit_event is None and self._emit_update is None:
             return
 
         samples = np.asarray(pcm, dtype=np.float32).reshape(-1)
@@ -278,7 +287,7 @@ class NemoStreamingProvider:
             await self._decode_source(source=source, buffer=buffer, is_final=False)
 
     async def stop(self) -> None:
-        if self._emit_event is None:
+        if self._emit_event is None and self._emit_update is None:
             return
 
         worker_client = self._worker_client
@@ -301,6 +310,7 @@ class NemoStreamingProvider:
                 self._buffers.clear()
         finally:
             self._emit_event = None
+            self._emit_update = None
             self._worker_client = None
 
         if worker_client is not None:
@@ -310,7 +320,7 @@ class NemoStreamingProvider:
         logger.info("nemo provider stopped")
 
     async def _decode_source(self, *, source: str, buffer: SourceBuffer, is_final: bool) -> None:
-        if self._emit_event is None or buffer.total_samples == 0:
+        if (self._emit_event is None and self._emit_update is None) or buffer.total_samples == 0:
             return
 
         worker_client = self._worker_client
@@ -355,16 +365,31 @@ class NemoStreamingProvider:
             len(transcript),
             len(delta),
         )
-        await self._emit_event(
-            TranscriptChunk(
-                source=source,
-                text=delta,
-                is_partial=not is_final,
-                started_at=timestamp,
-                ended_at=timestamp,
-                confidence=float(result.get("confidence", 0.0)),
+        if self._emit_update is not None:
+            await self._emit_update(
+                ProviderTranscriptUpdate(
+                    stream_id=source,
+                    source=source,
+                    text=delta,
+                    is_final=is_final,
+                    started_at=timestamp,
+                    ended_at=timestamp,
+                    confidence=float(result.get("confidence", 0.0)),
+                )
             )
-        )
+            return
+
+        if self._emit_event is not None:
+            await self._emit_event(
+                TranscriptChunk(
+                    source=source,
+                    text=delta,
+                    is_partial=not is_final,
+                    started_at=timestamp,
+                    ended_at=timestamp,
+                    confidence=float(result.get("confidence", 0.0)),
+                )
+            )
 
     @staticmethod
     def _build_worker_client(*, model_path: Path, python_executable: str, script_path: Path) -> WorkerClient:
