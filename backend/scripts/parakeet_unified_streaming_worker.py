@@ -46,12 +46,30 @@ class StreamingSession:
         self._stream_id: int | None = None
         self._full_text = ""
 
+        cfg = self._streaming_buffer.streaming_cfg
+        chunk_size = cfg.chunk_size
+        shift_size = getattr(cfg, "shift_size", None)
+        logger.info(
+            "streaming session created: chunk_size=%s shift_size=%s drop_extra_pre_encoded=%s",
+            chunk_size, shift_size, wrapper.drop_extra_pre_encoded,
+        )
+
     def push_audio(self, samples: np.ndarray) -> str:
         """Append raw float32 samples. Returns any new text produced."""
         if self._stream_id is None:
-            _, _, self._stream_id = self._streaming_buffer.append_audio(samples, stream_id=-1)
+            self._streaming_buffer.append_audio(samples, stream_id=-1)
+            self._stream_id = 0  # first append creates stream index 0
         else:
             self._streaming_buffer.append_audio(samples, stream_id=self._stream_id)
+
+        buf = self._streaming_buffer
+        logger.info(
+            "push_audio: samples=%d buffer_idx=%d buffer_len=%d streams_length=%s",
+            len(samples),
+            buf.buffer_idx,
+            buf.buffer.size(-1) if buf.buffer is not None else 0,
+            buf.streams_length.tolist() if buf.streams_length is not None else None,
+        )
         return self._drain(is_final=False)
 
     def finalize(self) -> str:
@@ -63,6 +81,7 @@ class StreamingSession:
     def _drain(self, is_final: bool) -> str:
         drop_extra = self._wrapper.drop_extra_pre_encoded
         parts: list[str] = []
+        steps_this_drain = 0
 
         for chunk_audio, chunk_lengths in iter(self._streaming_buffer):
             is_last = self._streaming_buffer.is_buffer_empty()
@@ -79,12 +98,21 @@ class StreamingSession:
             )
             self._previous_hypotheses = best_hyp
             self._step_num += 1
+            steps_this_drain += 1
 
             new_full = best_hyp[0].text if best_hyp else ""
             delta = _extract_increment(self._full_text, new_full)
             if delta:
                 self._full_text = new_full
                 parts.append(delta)
+
+            logger.info(
+                "drain step=%d chunk_shape=%s full_text_len=%d delta=%r",
+                self._step_num, list(chunk_audio.shape), len(self._full_text), delta,
+            )
+
+        if steps_this_drain == 0:
+            logger.info("drain: no chunks ready (buffer_idx=%d)", self._streaming_buffer.buffer_idx)
 
         return " ".join(parts)
 
