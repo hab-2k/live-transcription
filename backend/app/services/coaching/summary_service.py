@@ -25,11 +25,13 @@ class SummaryService:
         prompt_builder: PromptBuilder | None = None,
         llm_client: OpenAICompatibleClient | None = None,
     ) -> Awaitable[CallSummary | None] | None:
-        if flags is None and prompt_builder is None and llm_client is None:
+        if transcript is not None and flags is None and prompt_builder is None and llm_client is None:
             return None
 
         if transcript is None or flags is None or prompt_builder is None or llm_client is None:
-            return None
+            raise TypeError(
+                "SummaryService.build() requires transcript, flags, prompt_builder, and llm_client"
+            )
 
         return self._build_async(
             transcript=transcript,

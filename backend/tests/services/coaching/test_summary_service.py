@@ -115,3 +115,13 @@ def test_summary_service_legacy_build_call_returns_none() -> None:
     )
 
     assert summary is None
+
+
+def test_summary_service_partial_new_api_call_raises() -> None:
+    service = SummaryService()
+
+    with pytest.raises(TypeError, match="requires transcript, flags, prompt_builder, and llm_client"):
+        service.build(
+            transcript=[{"role": "colleague", "text": "Hello"}],
+            flags=[],
+        )
