@@ -7,7 +7,7 @@ Refresh the ended-call experience so it feels like a real coaching review rather
 The updated flow should:
 
 - land on a proper after-call summary when the session stops
-- show a short `Call recap` at the top
+- show an LLM-generated `Call recap` at the top
 - keep three coaching sections:
   - `Strengths`
   - `Weaknesses`
@@ -15,6 +15,7 @@ The updated flow should:
 - make `Flagged moments` mean possible vulnerabilities, dissatisfaction signals, or important things the caller may have missed
 - let the user move from the summary to a read-only transcript review screen
 - let the user start a new call or return to setup without pretending the ended session is still live
+- generate the recap and all three sections through the existing OpenAI-compatible LLM integration rather than placeholder heuristics
 
 ## Problem Statement
 
@@ -23,6 +24,7 @@ The current after-call experience is not good enough for the product goal.
 Today:
 
 - the backend summary generator is a placeholder with very shallow heuristics
+- the app already has an OpenAI-compatible LLM integration for coaching, but the summary path does not use it
 - the summary content is too generic and often reads like empty filler
 - the second section is named `Missed opportunities`, which does not match the desired colleague-facing coaching language
 - the third section can look blank or arbitrary rather than highlighting genuine call risks or vulnerabilities
@@ -33,6 +35,7 @@ The result is that the app technically produces a summary, but not one that feel
 ## Goals
 
 - Produce a concise, human-readable `Call recap` for the ended session.
+- Generate the recap and coaching sections through the configured LLM, using the same integration boundary the app already uses for live coaching.
 - Make `Strengths` focus on politeness, calmness, empathy, clarity, and helpful tone.
 - Make `Weaknesses` focus on practical improvements in how the call was handled.
 - Make `Flagged moments` focus on dissatisfaction, vulnerabilities, missed concerns, unclear commitments, or other important moments the caller may have missed.
@@ -43,11 +46,11 @@ The result is that the app technically produces a summary, but not one that feel
 
 ## Non-Goals
 
-- No LLM-dependent summary generation in this change.
 - No long-form analytics dashboard or call scorecard.
 - No persistence or historical call browsing.
 - No change to in-call coaching behavior.
 - No attempt to make the ended transcript editable.
+- No silent downgrade back to shallow heuristic bullets when the LLM path is available.
 
 ## Confirmed Product Decisions
 
@@ -61,6 +64,7 @@ The result is that the app technically produces a summary, but not one that feel
   - dissatisfaction signals
   - important things the caller might have missed
 - The summary includes a short `Call recap` above the coaching sections.
+- The after-call summary is LLM-driven and persona-aware.
 - After stopping a session, the app lands on the summary screen first.
 - The summary screen includes:
   - `View transcript`
@@ -167,28 +171,37 @@ The desktop client should normalize this into its renderer-facing summary view m
 
 ### Summary Generation
 
-The summary generator should stop relying on the current minimal phrase checks and instead derive structured coaching output from transcript cues.
+The summary generator should stop relying on the current minimal phrase checks and instead use the existing OpenAI-compatible LLM integration as the primary summary engine.
 
-The implementation should stay deterministic and local for now.
+The summary prompt should be persona-aware and based on:
+
+- transcript history for the session
+- relevant local rule outputs or risk flags
+- the active persona pack or coaching posture
+- a strict output contract for `recap`, `strengths`, `weaknesses`, and `flagged_moments`
 
 Recommended approach:
 
-- scan transcript for colleague tone and courtesy signals
-- scan transcript for ownership and next-step clarity
-- scan transcript for caller uncertainty, frustration, or unresolved concern
-- produce one short recap sentence or two based on the overall interaction pattern
-- fill the three summary sections with concise coaching bullets
+- add a dedicated after-call summary prompt path rather than reusing the live nudge prompt as-is
+- instruct the model to produce:
+  - a short recap of what happened in the call
+  - strengths centered on politeness, empathy, helpfulness, and tone
+  - weaknesses centered on specific coaching improvements
+  - flagged moments centered on dissatisfaction, vulnerability, or important missed points
+- require concise structured output that the backend can parse into the stable summary schema
+- keep the backend responsible for validation and normalization of the model response before returning it to the UI
 
 ### Fallback Behavior
 
-Every summary field must render something useful even for thin transcripts.
+The product requirement is that summary content comes from the LLM path.
 
-Fallback expectations:
+That means the backend should not silently replace LLM output with generic heuristic bullets, because that recreates the current problem in a less obvious form.
 
-- `recap`: explicit short note that the call was brief or had limited evidence
-- `strengths`: explicit positive note if any
-- `weaknesses`: explicit coaching suggestion if evidence is weak
-- `flagged_moments`: explicit no-major-risk sentence when nothing notable is detected
+Instead:
+
+- if the transcript is thin, the prompt should explicitly tell the model to say evidence is limited while still returning useful coaching
+- if the LLM response is malformed, the backend should validate, repair if possible, or return an explicit summary-unavailable result
+- if the LLM call fails, the UI should show an honest unavailable state rather than pretending a real summary was produced
 
 ## Desktop Design
 
@@ -238,11 +251,11 @@ Recommended review actions:
 
 Add coverage that verifies:
 
-- a polite and helpful call produces meaningful `strengths`
-- a weaker call produces meaningful `weaknesses`
-- a riskier or more dissatisfied call produces meaningful `flagged_moments`
-- summaries include a `recap`
-- fallback copy remains useful for very thin transcripts
+- the summary service sends a structured after-call prompt through the LLM client
+- parsed summaries include `recap`, `strengths`, `weaknesses`, and `flagged_moments`
+- persona and rule-context are included in the summary request path
+- malformed model output is rejected or normalized correctly
+- LLM failure returns an explicit unavailable path rather than heuristic filler
 
 ### Desktop Tests
 
@@ -258,6 +271,6 @@ Add coverage that verifies:
 
 ## Risks and Tradeoffs
 
-- Heuristic summaries will still be less nuanced than an LLM-written coaching recap, but they are faster, more reliable, and easier to test.
+- LLM-generated summaries should be much more useful than heuristic bullets, but they introduce response-format and availability risks that must be handled explicitly.
 - Reusing the live transcript screen for ended review keeps implementation small, but requires care so ended-state controls do not look like live-session controls.
-- Summary quality will depend on transcript quality. The design should therefore prefer explicit, honest fallback wording over overconfident claims.
+- Summary quality will still depend on transcript quality, so the prompt and UI should prefer explicit, honest wording when evidence is weak.
