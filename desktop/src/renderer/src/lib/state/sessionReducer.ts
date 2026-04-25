@@ -17,6 +17,15 @@ export type SessionSetup = {
   transcription: TranscriptionConfig;
 };
 
+export type SummaryView = {
+  recap: string;
+  strengths: string[];
+  weaknesses: string[];
+  flaggedMoments: string[];
+};
+
+export type EndedView = "summary" | "transcript";
+
 export type DebugLog = {
   id: string;
   label: string;
@@ -31,6 +40,7 @@ export type VoiceActivity = {
 
 export type SessionState = {
   status: "setup" | "live" | "ended";
+  endedView: EndedView;
   coachingPaused: boolean;
   transcript: TranscriptTurnEvent[];
   nudges: CoachingNudgeEvent[];
@@ -40,24 +50,16 @@ export type SessionState = {
   debugLogs: DebugLog[];
   lastRuleFlags: RuleFlagEvent[];
   setup: SessionSetup;
-  summary: {
-    strengths: string[];
-    missedOpportunities: string[];
-    flaggedMoments: string[];
-  } | null;
+  summary: SummaryView | null;
 };
 
 type SessionAction =
   | { type: "start_session"; setup: SessionSetup }
   | { type: "update_transcription_config"; transcription: TranscriptionConfig }
-  | {
-      type: "complete_session";
-      summary: {
-        strengths: string[];
-        missedOpportunities: string[];
-        flaggedMoments: string[];
-      } | null;
-    }
+  | { type: "complete_session"; summary: SummaryView | null }
+  | { type: "show_ended_summary" }
+  | { type: "show_ended_transcript" }
+  | { type: "reset_session" }
   | { type: "toggle_debug" }
   | { type: "ingest_event"; event: SessionEvent };
 
@@ -123,6 +125,7 @@ function upsertTranscriptTurn(
 export function createInitialSessionState(debugEnabled: boolean): SessionState {
   return {
     status: "setup",
+    endedView: "summary",
     coachingPaused: false,
     transcript: [],
     nudges: [],
@@ -142,6 +145,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       return {
         ...state,
         status: "live",
+        endedView: "summary",
         coachingPaused: false,
         debugOpen: false,
         transcript: [],
@@ -174,10 +178,17 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       return {
         ...state,
         status: "ended",
+        endedView: "summary",
         coachingPaused: false,
         debugOpen: false,
         summary: action.summary,
       };
+    case "show_ended_summary":
+      return state.status === "ended" ? { ...state, endedView: "summary" } : state;
+    case "show_ended_transcript":
+      return state.status === "ended" ? { ...state, endedView: "transcript" } : state;
+    case "reset_session":
+      return createInitialSessionState(state.debugEnabled);
     case "toggle_debug":
       if (!state.debugEnabled) {
         return state;
@@ -233,6 +244,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
                 ? false
                 : state.coachingPaused,
           status: action.event.status === "stopped" ? "ended" : state.status,
+          endedView: action.event.status === "stopped" ? "summary" : state.endedView,
         };
       }
 

@@ -99,6 +99,23 @@ export default function App() {
     [],
   );
 
+  const handleShowEndedSummary = useCallback(() => {
+    dispatch({ type: "show_ended_summary" });
+  }, []);
+
+  const handleShowEndedTranscript = useCallback(() => {
+    dispatch({ type: "show_ended_transcript" });
+  }, []);
+
+  const handleResetSession = useCallback(() => {
+    disconnectRef.current?.();
+    disconnectRef.current = null;
+    sessionIdRef.current = null;
+    dispatch({ type: "reset_session" });
+    setStartError(null);
+    setStarting(false);
+  }, []);
+
   useEffect(() => {
     return () => {
       disconnectRef.current?.();
@@ -116,13 +133,37 @@ export default function App() {
     );
   }
 
-  if (state.status === "ended" && state.summary !== null) {
-    return <SummaryScreen summary={state.summary} />;
+  if (state.status === "ended") {
+    if (state.endedView === "summary") {
+      return (
+        <SummaryScreen
+          summary={state.summary}
+          onStartNewCall={handleResetSession}
+          onViewTranscript={handleShowEndedTranscript}
+        />
+      );
+    }
+
+    return (
+      <LiveScreen
+        mode="review"
+        onApplyTranscription={handleApplyTranscription}
+        onBackToSetup={handleResetSession}
+        onBackToSummary={handleShowEndedSummary}
+        onPauseCoaching={handlePauseCoaching}
+        onStopSession={handleStop}
+        onToggleDebug={() => dispatch({ type: "toggle_debug" })}
+        state={state}
+      />
+    );
   }
 
   return (
     <LiveScreen
+      mode="live"
       onApplyTranscription={handleApplyTranscription}
+      onBackToSetup={handleResetSession}
+      onBackToSummary={handleShowEndedSummary}
       onPauseCoaching={handlePauseCoaching}
       onStopSession={handleStop}
       onToggleDebug={() => dispatch({ type: "toggle_debug" })}

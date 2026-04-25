@@ -116,13 +116,48 @@ describe("sessionReducer", () => {
     const ended = sessionReducer(liveState, {
       type: "complete_session",
       summary: {
+        recap: "The caller asked about a payment.",
         strengths: ["Clear ownership statement"],
-        missedOpportunities: ["Could confirm the next step sooner"],
+        weaknesses: ["Could confirm the next step sooner"],
         flaggedMoments: ["Missing reassurance in the opening"],
       },
     });
 
     expect(ended.status).toBe("ended");
+    expect(ended.endedView).toBe("summary");
     expect(ended.summary?.strengths).toEqual(["Clear ownership statement"]);
+  });
+
+  it("switches between ended summary and transcript review", () => {
+    const liveState = createLiveState();
+    const ended = sessionReducer(liveState, {
+      type: "complete_session",
+      summary: {
+        recap: "Brief call recap.",
+        strengths: ["Polite tone."],
+        weaknesses: ["Could be clearer."],
+        flaggedMoments: ["Caller still sounded unsure."],
+      },
+    });
+
+    const transcriptView = sessionReducer(ended, { type: "show_ended_transcript" });
+    const summaryView = sessionReducer(transcriptView, { type: "show_ended_summary" });
+
+    expect(transcriptView.endedView).toBe("transcript");
+    expect(summaryView.endedView).toBe("summary");
+  });
+
+  it("resets back to setup from an ended session", () => {
+    const liveState = createLiveState();
+    const ended = sessionReducer(liveState, {
+      type: "complete_session",
+      summary: null,
+    });
+
+    const reset = sessionReducer(ended, { type: "reset_session" });
+
+    expect(reset.status).toBe("setup");
+    expect(reset.summary).toBeNull();
+    expect(reset.transcript).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import type { SessionSetup } from "../state/sessionReducer";
+import type { SessionSetup, SummaryView } from "../state/sessionReducer";
 import type {
   CoachingNudgeEvent,
   RuleFlagEvent,
@@ -25,25 +25,16 @@ type UpdateTranscriptionResponse = {
 };
 
 type BackendSummary = {
+  recap: string;
   strengths: string[];
-  missed_opportunities: string[];
+  weaknesses: string[];
   flagged_moments: string[];
 };
 
 export type StopSessionResponse = {
   status: string;
   session_id: string;
-  summary: {
-    strengths: string[];
-    missedOpportunities: string[];
-    flaggedMoments: string[];
-  } | null;
-};
-
-const EMPTY_SUMMARY = {
-  strengths: [],
-  missedOpportunities: [],
-  flaggedMoments: [],
+  summary: SummaryView | null;
 };
 
 type DesktopBridge = {
@@ -265,14 +256,15 @@ export async function setTranscriptionConfig(
   return readJsonResponse<UpdateTranscriptionResponse>(response);
 }
 
-function normalizeSummary(summary: BackendSummary | null) {
+function normalizeSummary(summary: BackendSummary | null): SummaryView | null {
   if (summary === null) {
-    return EMPTY_SUMMARY;
+    return null;
   }
 
   return {
+    recap: summary.recap,
     strengths: summary.strengths,
-    missedOpportunities: summary.missed_opportunities,
+    weaknesses: summary.weaknesses,
     flaggedMoments: summary.flagged_moments,
   };
 }

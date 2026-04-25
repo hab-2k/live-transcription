@@ -75,6 +75,7 @@ const stateWithTranscript: SessionState = {
     },
   },
   summary: null,
+  endedView: "summary",
 };
 
 afterEach(() => {
@@ -85,7 +86,10 @@ describe("LiveScreen", () => {
   it("renders transcript rows and pause/stop controls", () => {
     render(
       <LiveScreen
+        mode="live"
         onApplyTranscription={vi.fn()}
+        onBackToSetup={vi.fn()}
+        onBackToSummary={vi.fn()}
         state={stateWithTranscript}
         onPauseCoaching={vi.fn()}
         onStopSession={vi.fn()}
@@ -101,7 +105,10 @@ describe("LiveScreen", () => {
   it("renders a single live transcript lane for mic-only sessions", () => {
     render(
       <LiveScreen
+        mode="live"
         onApplyTranscription={vi.fn()}
+        onBackToSetup={vi.fn()}
+        onBackToSummary={vi.fn()}
         state={{
           ...stateWithTranscript,
           setup: {
@@ -127,7 +134,10 @@ describe("LiveScreen", () => {
 
     render(
       <LiveScreen
+        mode="live"
         onApplyTranscription={onApplyTranscription}
+        onBackToSetup={vi.fn()}
+        onBackToSummary={vi.fn()}
         state={{
           ...stateWithTranscript,
           debugOpen: true,
@@ -148,5 +158,30 @@ describe("LiveScreen", () => {
         provider: "nemo",
       }),
     );
+  });
+
+  it("renders review navigation instead of live controls when showing an ended transcript", () => {
+    render(
+      <LiveScreen
+        mode="review"
+        onApplyTranscription={vi.fn()}
+        onBackToSetup={vi.fn()}
+        onBackToSummary={vi.fn()}
+        state={{
+          ...stateWithTranscript,
+          status: "ended",
+          endedView: "transcript",
+        }}
+        onPauseCoaching={vi.fn()}
+        onStopSession={vi.fn()}
+        onToggleDebug={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: /transcript review/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /pause coaching/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /stop session/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /back to summary/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /back to setup/i })).toBeInTheDocument();
   });
 });

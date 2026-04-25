@@ -201,8 +201,9 @@ describe("parseSessionEvent", () => {
           status: "stopped",
           session_id: "session-123",
           summary: {
+            recap: "The caller asked about a payment and left partly reassured.",
             strengths: ["Clear ownership statement"],
-            missed_opportunities: ["Could confirm the next step sooner"],
+            weaknesses: ["Could confirm the next step sooner"],
             flagged_moments: ["Missing reassurance"],
           },
         }),
@@ -210,12 +211,30 @@ describe("parseSessionEvent", () => {
 
     const response = await stopSession("session-123", "http://localhost:8000");
 
+    expect(response.summary?.recap).toContain("payment");
     expect(response.summary?.strengths).toEqual(["Clear ownership statement"]);
+    expect(response.summary?.weaknesses).toEqual(["Could confirm the next step sooner"]);
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://localhost:8000/api/sessions/session-123/stop",
       expect.objectContaining({
         method: "POST",
       }),
     );
+  });
+
+  it("preserves a null summary from the stop endpoint", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          status: "stopped",
+          session_id: "session-123",
+          summary: null,
+        }),
+    }) as unknown as typeof fetch;
+
+    const response = await stopSession("session-123", "http://localhost:8000");
+
+    expect(response.summary).toBeNull();
   });
 });

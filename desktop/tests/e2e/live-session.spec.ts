@@ -45,8 +45,9 @@ test("setup to live to summary flow", async () => {
           status: "stopped",
           session_id: "session-123",
           summary: {
+            recap: "The caller asked about a payment and left partly reassured.",
             strengths: ["Clear ownership statement"],
-            missed_opportunities: ["Could confirm the next step sooner"],
+            weaknesses: ["Could confirm the next step sooner"],
             flagged_moments: ["Missing reassurance in the opening"],
           },
         }),
@@ -63,6 +64,11 @@ test("setup to live to summary flow", async () => {
     await window.getByRole("button", { name: /stop session/i }).click();
     await sessionStopped;
     await expect(window.getByRole("heading", { name: /call summary/i })).toBeVisible();
+    await expect(window.getByText(/call recap/i)).toBeVisible();
+    await window.getByRole("button", { name: /view transcript/i }).click();
+    await expect(window.getByRole("heading", { name: /transcript review/i })).toBeVisible();
+    await window.getByRole("button", { name: /back to setup/i }).click();
+    await expect(window.getByRole("heading", { name: /start session/i })).toBeVisible();
   } finally {
     await app.close();
   }
