@@ -39,12 +39,12 @@ class ParakeetUnifiedProvider:
         self._model_id = raw
 
         self._model: Any = None
-        self._stream_ctx: Any = None
-        self._transcriber: Any = None
+        self._stream_ctxs: dict[str, Any] = {}
+        self._transcribers: dict[str, Any] = {}
         self._executor: concurrent.futures.ThreadPoolExecutor | None = None
         self._lock = asyncio.Lock()
-        self._prev_finalized_count: int = 0
-        self._prev_draft_text: str = ""
+        self._prev_finalized_counts: dict[str, int] = {}
+        self._prev_draft_texts: dict[str, str] = {}
         self._total_samples: dict[str, int] = {}
         self._sample_rates: dict[str, int] = {}
         self._audio_buffers: dict[str, list[np.ndarray]] = {}
@@ -56,31 +56,29 @@ class ParakeetUnifiedProvider:
         emit_update: UpdateSink | None = None,
         emit_event: EventSink | None = None,
     ) -> None:
-        self._emit_event = emit_event
+        self._emit_event = emit_update or emit_event  # type: ignore[assignment]
         self._emit_update = emit_update
-        self._prev_finalized_count = 0
-        self._prev_draft_text = ""
         self._total_samples.clear()
         self._sample_rates.clear()
         self._audio_buffers.clear()
         self._audio_buffer_samples.clear()
+        self._stream_ctxs.clear()
+        self._transcribers.clear()
+        self._prev_finalized_counts.clear()
+        self._prev_draft_texts.clear()
 
         logger.info("parakeet_unified provider starting: model=%s", self._model_id)
         async with self._lock:
             try:
-                self._model, self._stream_ctx, self._transcriber = await self._run_on_executor(
-                    self._load_model_and_open_stream
-                )
+                self._model = await self._run_on_executor(self._load_model)
             except Exception:
                 self._emit_event = None
                 self._emit_update = None
                 self._model = None
-                self._stream_ctx = None
-                self._transcriber = None
                 await self._shutdown_executor()
                 raise
 
-        logger.info("parakeet_unified provider ready (streaming context open)")
+        logger.info("parakeet_unified provider ready (model loaded, streams opened lazily)")
 
     async def push_audio(self, *, source: str, pcm: Any, sample_rate: int) -> None:
         if self._emit_event is None and self._emit_update is None:
@@ -94,6 +92,16 @@ class ParakeetUnifiedProvider:
             self._sample_rates[source] = sample_rate
             self._total_samples[source] = 0
             logger.info("stream started: source=%s sample_rate=%d", source, sample_rate)
+
+            # Lazy: open a streaming context for this source
+            async with self._lock:
+                stream_ctx, transcriber = await self._run_on_executor(
+                    lambda: self._open_stream_for_model(self._model)
+                )
+                self._stream_ctxs[source] = stream_ctx
+                self._transcribers[source] = transcriber
+                self._prev_finalized_counts[source] = 0
+                self._prev_draft_texts[source] = ""
 
         self._total_samples[source] += samples.size
 
@@ -115,7 +123,7 @@ class ParakeetUnifiedProvider:
 
     async def _send_audio_to_transcriber(self, *, source: str, samples: np.ndarray) -> None:
         async with self._lock:
-            transcriber = self._transcriber
+            transcriber = self._transcribers.get(source)
             if transcriber is None:
                 return
 
@@ -127,7 +135,7 @@ class ParakeetUnifiedProvider:
                 logger.exception("add_audio failed: source=%s", source)
                 return
 
-            self._prev_finalized_count = len(finalized)
+            self._prev_finalized_counts[source] = len(finalized)
 
             # Combine finalized + draft into a single progressive text.
             # Emitting finalized deltas as is_final=True would close the
@@ -136,11 +144,11 @@ class ParakeetUnifiedProvider:
             # finalize_utterance / silence detection close the turn.
             combined = self._tokens_to_text(finalized + draft)
             if not combined:
-                self._prev_draft_text = ""
+                self._prev_draft_texts[source] = ""
                 return
 
-        if combined != self._prev_draft_text:
-            self._prev_draft_text = combined
+        if combined != self._prev_draft_texts[source]:
+            self._prev_draft_texts[source] = combined
             await self._emit_delta(source=source, text=combined, is_final=False)
 
     async def finalize_utterance(self, *, source: str) -> bool:
@@ -151,7 +159,7 @@ class ParakeetUnifiedProvider:
         await self._flush_audio_buffer(source)
 
         async with self._lock:
-            transcriber = self._transcriber
+            transcriber = self._transcribers.get(source)
             model = self._model
             if transcriber is None or model is None:
                 return False
@@ -165,7 +173,7 @@ class ParakeetUnifiedProvider:
                 return False
 
             try:
-                await self._run_on_executor(self._reopen_stream)
+                await self._run_on_executor(lambda: self._reopen_stream(source))
             except Exception:
                 logger.exception("utterance stream rollover failed: source=%s", source)
                 return False
@@ -185,63 +193,48 @@ class ParakeetUnifiedProvider:
         for source in list(self._audio_buffers):
             await self._flush_audio_buffer(source)
 
-        stop_source = (
-            next(reversed(self._total_samples))
-            if len(self._total_samples) == 1
-            else "mixed"
-        )
-
         for source, total in self._total_samples.items():
             sr = self._sample_rates.get(source, 16000)
             logger.info("stream stopped: source=%s total_secs=%.2f", source, total / sr)
 
-        self._total_samples.clear()
-        self._sample_rates.clear()
-        self._audio_buffers.clear()
-        self._audio_buffer_samples.clear()
-
         pending_stop_updates: list[tuple[str, str]] = []
 
-        # Close the streaming context
+        # Close all streaming contexts
         async with self._lock:
-            transcriber = self._transcriber
-            if transcriber is not None:
+            for src in list(self._transcribers):
+                transcriber = self._transcribers[src]
                 try:
                     finalized, draft = await self._run_on_executor(
-                        lambda: self._snapshot_tokens(transcriber)
+                        lambda t=transcriber: self._snapshot_tokens(t)
                     )
                 except Exception:
-                    logger.exception("stream snapshot failed during stop")
+                    logger.exception("stream snapshot failed during stop: source=%s", src)
                 else:
-                    if len(finalized) > self._prev_finalized_count:
-                        new_final_text = self._tokens_to_text(
-                            finalized[self._prev_finalized_count :]
-                        )
-                        self._prev_finalized_count = len(finalized)
+                    prev_count = self._prev_finalized_counts.get(src, 0)
+                    if len(finalized) > prev_count:
+                        new_final_text = self._tokens_to_text(finalized[prev_count:])
                         if new_final_text:
-                            pending_stop_updates.append(("finalized", new_final_text))
-
+                            pending_stop_updates.append((src, new_final_text))
                     draft_text = self._tokens_to_text(draft)
                     if draft_text:
-                        pending_stop_updates.append(("draft", draft_text))
-                        self._prev_draft_text = ""
+                        pending_stop_updates.append((src, draft_text))
 
-            if self._stream_ctx is not None:
-                try:
-                    await self._run_on_executor(
-                        lambda: self._stream_ctx.__exit__(None, None, None)
-                    )
-                except Exception:
-                    logger.exception("stream context exit failed")
-                self._stream_ctx = None
-                self._transcriber = None
-                logger.info("parakeet streaming context closed")
+                ctx = self._stream_ctxs.get(src)
+                if ctx is not None:
+                    try:
+                        await self._run_on_executor(lambda c=ctx: c.__exit__(None, None, None))
+                    except Exception:
+                        logger.exception("stream context exit failed: source=%s", src)
 
+            self._stream_ctxs.clear()
+            self._transcribers.clear()
+            self._prev_finalized_counts.clear()
+            self._prev_draft_texts.clear()
             self._model = None
 
-        for update_kind, text in pending_stop_updates:
-            logger.info("%s on stop: %r", update_kind, text)
-            await self._emit_delta(source=stop_source, text=text, is_final=True)
+        for src, text in pending_stop_updates:
+            logger.info("finalized on stop: source=%s text=%r", src, text)
+            await self._emit_delta(source=src, text=text, is_final=True)
 
         await self._shutdown_executor()
         self._emit_event = None
@@ -283,12 +276,10 @@ class ParakeetUnifiedProvider:
                 )
             )
 
-    def _load_model_and_open_stream(self) -> tuple[Any, Any, Any]:
+    def _load_model(self) -> Any:
         from parakeet_mlx import from_pretrained
 
-        model = from_pretrained(self._model_id)
-        stream_ctx, transcriber = self._open_stream_for_model(model)
-        return model, stream_ctx, transcriber
+        return from_pretrained(self._model_id)
 
     def _add_audio_and_snapshot(self, transcriber: Any, samples: np.ndarray) -> tuple[list[Any], list[Any]]:
         import mlx.core as mx
@@ -305,16 +296,17 @@ class ParakeetUnifiedProvider:
         transcriber = stream_ctx.__enter__()
         return stream_ctx, transcriber
 
-    def _reopen_stream(self) -> None:
-        if self._stream_ctx is not None:
-            self._stream_ctx.__exit__(None, None, None)
+    def _reopen_stream(self, source: str) -> None:
+        ctx = self._stream_ctxs.get(source)
+        if ctx is not None:
+            ctx.__exit__(None, None, None)
 
         if self._model is None:
             raise RuntimeError("Parakeet model is not loaded")
 
-        self._stream_ctx, self._transcriber = self._open_stream_for_model(self._model)
-        self._prev_finalized_count = 0
-        self._prev_draft_text = ""
+        self._stream_ctxs[source], self._transcribers[source] = self._open_stream_for_model(self._model)
+        self._prev_finalized_counts[source] = 0
+        self._prev_draft_texts[source] = ""
 
     @staticmethod
     def _snapshot_tokens(transcriber: Any) -> tuple[list[Any], list[Any]]:

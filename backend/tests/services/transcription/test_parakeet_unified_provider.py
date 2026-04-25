@@ -75,14 +75,15 @@ class CyclingModel:
         return ctx
 
 
-def _make_provider(transcriber: FakeTranscriber) -> ParakeetUnifiedProvider:
+def _make_provider(transcriber: FakeTranscriber, source: str = "microphone") -> ParakeetUnifiedProvider:
     model = FakeModel(transcriber)
     provider = ParakeetUnifiedProvider(
         settings=SimpleNamespace(parakeet_model_path="fake-model"),
     )
     provider._model = model
-    provider._stream_ctx = model.transcribe_stream()
-    provider._transcriber = provider._stream_ctx.__enter__()
+    stream_ctx = model.transcribe_stream()
+    provider._stream_ctxs[source] = stream_ctx
+    provider._transcribers[source] = stream_ctx.__enter__()
     return provider
 
 
@@ -279,8 +280,8 @@ async def test_provider_finalize_utterance_rolls_stream_and_emits_final(
         settings=SimpleNamespace(parakeet_model_path="fake-model"),
     )
     provider._model = model
-    provider._stream_ctx = model.transcribe_stream()
-    provider._transcriber = provider._stream_ctx.__enter__()
+    provider._stream_ctxs["microphone"] = model.transcribe_stream()
+    provider._transcribers["microphone"] = provider._stream_ctxs["microphone"].__enter__()
     emitted = []
 
     async def emit_update(update) -> None:
@@ -294,7 +295,7 @@ async def test_provider_finalize_utterance_rolls_stream_and_emits_final(
     assert [update.text for update in emitted] == ["hello"]
     assert [update.is_final for update in emitted] == [True]
     assert model.stream_contexts[0].exited is True
-    assert provider._transcriber is second
+    assert provider._transcribers["microphone"] is second
 
 
 @pytest.mark.asyncio
@@ -333,5 +334,69 @@ async def test_provider_sends_when_buffer_threshold_reached(monkeypatch: pytest.
         sample_rate=16_000,
     )
     assert len(transcriber.audio_calls) == 1
+
+    await provider.stop()
+
+
+@pytest.mark.asyncio
+async def test_provider_isolates_mic_and_system_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each source gets its own transceiver instance; audio never mixes between them."""
+    _install_fake_mlx(monkeypatch)
+    mic_transcriber = FakeTranscriber()
+    sys_transcriber = FakeTranscriber()
+    model = CyclingModel([mic_transcriber, sys_transcriber])
+
+    fake_parakeet_mlx = ModuleType("parakeet_mlx")
+    fake_parakeet_mlx.from_pretrained = lambda model_id: model
+
+    monkeypatch.setitem(sys.modules, "parakeet_mlx", fake_parakeet_mlx)
+
+    provider = ParakeetUnifiedProvider(
+        settings=SimpleNamespace(parakeet_model_path="fake-model"),
+    )
+    emitted = []
+
+    async def emit_update(update) -> None:
+        emitted.append(update)
+
+    await provider.start(emit_update=emit_update)
+
+    # Push audio to mic source — opens mic transcriber
+    await provider.push_audio(
+        source="microphone",
+        pcm=np.ones(8000, dtype=np.float32),
+        sample_rate=16_000,
+    )
+    assert "microphone" in provider._transcribers
+    assert len(mic_transcriber.audio_calls) == 1
+    assert len(sys_transcriber.audio_calls) == 0
+
+    # Push audio to system source — opens system transcriber
+    await provider.push_audio(
+        source="system",
+        pcm=np.ones(8000, dtype=np.float32),
+        sample_rate=16_000,
+    )
+    assert "system" in provider._transcribers
+    assert len(mic_transcriber.audio_calls) == 1
+    assert len(sys_transcriber.audio_calls) == 1
+
+    # Verify emitted deltas are tagged with correct source
+    mic_updates = [u for u in emitted if u.source == "microphone"]
+    sys_updates = [u for u in emitted if u.source == "system"]
+    assert len(mic_updates) == 1
+    assert len(sys_updates) == 1
+
+    # Finalize mic — system transcriber should be unaffected
+    assert provider._transcribers.get("system") is not None
+
+    # Push more audio to system — still works on its own transcriber
+    await provider.push_audio(
+        source="system",
+        pcm=np.ones(8000, dtype=np.float32),
+        sample_rate=16_000,
+    )
+    assert len(sys_transcriber.audio_calls) == 2
+    assert len(mic_transcriber.audio_calls) == 1
 
     await provider.stop()
