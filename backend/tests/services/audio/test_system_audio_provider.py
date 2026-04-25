@@ -144,6 +144,35 @@ class TestProviderStatus:
         assert status.state == "error"
         assert "boom" in status.message
 
+    def test_request_permission_runs_helper_and_returns_status(self, tmp_path: Path) -> None:
+        binary = tmp_path / ".build" / "debug" / "system-audio-capture"
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        payload = json.dumps(
+            {
+                "provider": PROVIDER_SCREEN_CAPTURE_KIT,
+                "state": "available",
+                "message": "Ready to capture system audio.",
+            }
+        )
+
+        with (
+            patch("app.services.audio.system_audio_provider._MACOS_BUILD_DIR", tmp_path),
+            patch("sys.platform", "darwin"),
+            patch(
+                "subprocess.run",
+                return_value=MagicMock(returncode=0, stdout=payload, stderr=""),
+            ) as mock_run,
+        ):
+            status = ScreenCaptureKitSystemAudioProvider().request_permission()
+
+        assert status == SystemAudioProviderStatus(
+            provider=PROVIDER_SCREEN_CAPTURE_KIT,
+            state="available",
+            message="Ready to capture system audio.",
+        )
+        assert "--request-permission" in mock_run.call_args[0][0]
+
 
 class TestTargetListing:
     def test_returns_empty_list_on_non_darwin(self) -> None:

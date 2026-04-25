@@ -4,6 +4,7 @@ import {
   connectSessionEvents,
   getBackendUrl,
   parseSessionEvent,
+  requestSystemAudioPermission,
   setCoachingPaused,
   setTranscriptionConfig,
   startSession,
@@ -178,6 +179,29 @@ describe("parseSessionEvent", () => {
             target_id: "screen_capture_kit:1234",
           },
         }),
+      }),
+    );
+  });
+
+  it("requests screen recording permission through the system audio endpoint", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          provider: "screen_capture_kit",
+          state: "permission_required",
+          message: "Screen Recording permission is required.",
+          targets: [],
+        }),
+    }) as unknown as typeof fetch;
+
+    const response = await requestSystemAudioPermission("http://localhost:8000");
+
+    expect(response.state).toBe("permission_required");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://localhost:8000/api/system-audio/request-permission",
+      expect.objectContaining({
+        method: "POST",
       }),
     );
   });

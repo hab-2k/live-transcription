@@ -93,6 +93,45 @@ def test_system_audio_route_returns_status_and_targets() -> None:
     }
 
 
+def test_request_system_audio_permission_returns_updated_status() -> None:
+    client = TestClient(app)
+
+    class FakeSystemAudioProvider:
+        def request_permission(self) -> SystemAudioProviderStatus:
+            return SystemAudioProviderStatus(
+                provider="screen_capture_kit",
+                state="available",
+                message="Ready to capture system audio.",
+            )
+
+        def list_targets(self) -> list[SystemAudioTarget]:
+            return [
+                SystemAudioTarget(
+                    id="screen_capture_kit:system",
+                    name="Entire system audio",
+                    kind="system",
+                )
+            ]
+
+    with patch("app.api.routes.session.system_audio_provider", FakeSystemAudioProvider()):
+        response = client.post("/api/system-audio/request-permission")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider": "screen_capture_kit",
+        "state": "available",
+        "message": "Ready to capture system audio.",
+        "targets": [
+            {
+                "id": "screen_capture_kit:system",
+                "name": "Entire system audio",
+                "kind": "system",
+                "icon_hint": None,
+            }
+        ],
+    }
+
+
 def test_start_session_passes_nested_transcription_config_to_session_manager() -> None:
     client = TestClient(app)
     captured: dict[str, object] = {}

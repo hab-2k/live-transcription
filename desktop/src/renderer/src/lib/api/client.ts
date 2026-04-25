@@ -42,6 +42,18 @@ type DesktopBridge = {
   backendUrl?: string;
 };
 
+type BackendSystemAudioAvailability = {
+  provider: string;
+  state: string;
+  message: string;
+  targets: Array<{
+    id: string;
+    name: string;
+    kind: string;
+    icon_hint: string | null;
+  }>;
+};
+
 async function readJsonResponse<T>(response: Response | { ok?: boolean; status?: number; json: () => Promise<unknown> }) {
   const payload = (await response.json()) as T | { detail?: string };
 
@@ -82,17 +94,7 @@ function serializeTranscriptionConfig(config: TranscriptionConfig) {
   };
 }
 
-function normalizeSystemAudioAvailability(payload: {
-  provider: string;
-  state: string;
-  message: string;
-  targets: Array<{
-    id: string;
-    name: string;
-    kind: string;
-    icon_hint: string | null;
-  }>;
-}): SystemAudioAvailability {
+function normalizeSystemAudioAvailability(payload: BackendSystemAudioAvailability): SystemAudioAvailability {
   return {
     provider: payload.provider,
     state: payload.state as SystemAudioAvailability["state"],
@@ -238,17 +240,18 @@ export function connectSessionEvents(
 
 export async function getSystemAudio(baseUrl: string): Promise<SystemAudioAvailability> {
   const response = await fetch(`${baseUrl}/api/system-audio`);
-  const payload = await readJsonResponse<{
-    provider: string;
-    state: string;
-    message: string;
-    targets: Array<{
-      id: string;
-      name: string;
-      kind: string;
-      icon_hint: string | null;
-    }>;
-  }>(response);
+  const payload = await readJsonResponse<BackendSystemAudioAvailability>(response);
+
+  return normalizeSystemAudioAvailability(payload);
+}
+
+export async function requestSystemAudioPermission(
+  baseUrl: string,
+): Promise<SystemAudioAvailability> {
+  const response = await fetch(`${baseUrl}/api/system-audio/request-permission`, {
+    method: "POST",
+  });
+  const payload = await readJsonResponse<BackendSystemAudioAvailability>(response);
 
   return normalizeSystemAudioAvailability(payload);
 }

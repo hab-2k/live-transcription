@@ -25,6 +25,9 @@ class SystemAudioProvider(Protocol):
     def get_status(self) -> Any:
         """Return provider readiness and permission state."""
 
+    def request_permission(self) -> Any:
+        """Prompt for permission when the provider supports it."""
+
     def list_targets(self) -> list[Any]:
         """Return user-selectable system audio targets."""
 

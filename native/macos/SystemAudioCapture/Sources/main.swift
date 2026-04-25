@@ -2,6 +2,7 @@ import Foundation
 
 enum Command {
     case status
+    case requestPermission
     case listTargets
     case capture(targetID: String, sampleRate: Int)
 }
@@ -16,6 +17,7 @@ enum CommandLineError: Error, CustomStringConvertible {
         case .usage:
             return """
             Usage: system-audio-capture --status
+                   system-audio-capture --request-permission
                    system-audio-capture --list-targets
                    system-audio-capture --capture --target-id <id> [--sample-rate <rate>]
             """
@@ -39,6 +41,9 @@ private func runCommand(_ command: Command) async throws {
     case .status:
         try printJSONObject(ShareableContentCatalog.statusObject())
         exit(0)
+    case .requestPermission:
+        try printJSONObject(ShareableContentCatalog.requestPermissionObject())
+        exit(0)
     case .listTargets:
         try printJSONObject(try await ShareableContentCatalog.listTargetObjects())
         exit(0)
@@ -58,6 +63,10 @@ private func parseCommand(arguments: [String]) throws -> Command {
 
     if args.contains("--status") {
         return .status
+    }
+
+    if args.contains("--request-permission") {
+        return .requestPermission
     }
 
     if args.contains("--list-targets") {

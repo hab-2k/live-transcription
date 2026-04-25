@@ -3,6 +3,7 @@ import Foundation
 import ScreenCaptureKit
 
 let systemAudioProviderID = "screen_capture_kit"
+let entireSystemTargetID = "\(systemAudioProviderID):system"
 
 enum ShareableContentCatalogError: Error, CustomStringConvertible {
     case permissionRequired
@@ -23,8 +24,7 @@ enum ShareableContentCatalogError: Error, CustomStringConvertible {
 
 struct ResolvedTarget {
     let id: String
-    let application: SCRunningApplication
-    let display: SCDisplay
+    let filter: SCContentFilter
 }
 
 struct TargetDescriptor {
@@ -63,6 +63,23 @@ enum ShareableContentCatalog {
         ]
     }
 
+    static func requestPermissionObject() -> [String: Any] {
+        let requestGranted = CGRequestScreenCaptureAccess()
+        if CGPreflightScreenCaptureAccess() {
+            return statusObject()
+        }
+
+        if requestGranted {
+            return [
+                "provider": systemAudioProviderID,
+                "state": "permission_required",
+                "message": "Screen Recording permission was granted. Quit and reopen the app if capture is still unavailable.",
+            ]
+        }
+
+        return statusObject()
+    }
+
     static func listTargetObjects() async throws -> [[String: Any]] {
         guard CGPreflightScreenCaptureAccess() else {
             return []
@@ -78,32 +95,68 @@ enum ShareableContentCatalog {
         }
 
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let pid = parseTargetID(id) else {
+        guard let selection = parseTargetID(id) else {
             throw ShareableContentCatalogError.invalidTarget(id)
         }
 
-        guard let application = content.applications.first(where: { Int($0.processID) == pid }) else {
-            throw ShareableContentCatalogError.unavailableTarget(id)
-        }
+        switch selection {
+        case .system:
+            guard let display = primaryDisplay(in: content.displays) else {
+                throw ShareableContentCatalogError.unavailableTarget(id)
+            }
 
-        let windows = visibleWindows(for: application, in: content)
-        guard !windows.isEmpty else {
-            throw ShareableContentCatalogError.unavailableTarget(id)
-        }
+            return ResolvedTarget(
+                id: id,
+                filter: SCContentFilter(
+                    display: display,
+                    excludingApplications: [],
+                    exceptingWindows: []
+                )
+            )
+        case .application(let pid):
+            guard let application = content.applications.first(where: { Int($0.processID) == pid }) else {
+                throw ShareableContentCatalogError.unavailableTarget(id)
+            }
 
-        guard let display = preferredDisplay(for: windows, in: content.displays) ?? content.displays.first else {
-            throw ShareableContentCatalogError.unavailableTarget(id)
-        }
+            let windows = visibleWindows(for: application, in: content)
+            guard !windows.isEmpty else {
+                throw ShareableContentCatalogError.unavailableTarget(id)
+            }
 
-        return ResolvedTarget(id: id, application: application, display: display)
+            guard let display = preferredDisplay(for: windows, in: content.displays) ?? content.displays.first else {
+                throw ShareableContentCatalogError.unavailableTarget(id)
+            }
+
+            return ResolvedTarget(
+                id: id,
+                filter: SCContentFilter(
+                    display: display,
+                    including: [application],
+                    exceptingWindows: []
+                )
+            )
+        }
     }
 
     private static func buildTargets(from content: SCShareableContent) -> [TargetDescriptor] {
+        var targets: [TargetDescriptor] = []
+        if let display = primaryDisplay(in: content.displays) {
+            targets.append(
+                TargetDescriptor(
+                    id: entireSystemTargetID,
+                    name: "Entire system audio",
+                    kind: "system",
+                    iconHint: nil,
+                    metadata: ["display_id": Int(display.displayID)]
+                )
+            )
+        }
+
         let sortedApplications = content.applications.sorted {
             $0.applicationName.localizedCaseInsensitiveCompare($1.applicationName) == .orderedAscending
         }
 
-        return sortedApplications.compactMap { application in
+        let appTargets: [TargetDescriptor] = sortedApplications.compactMap { application -> TargetDescriptor? in
             let windows = visibleWindows(for: application, in: content)
             guard !windows.isEmpty else {
                 return nil
@@ -120,6 +173,9 @@ enum ShareableContentCatalog {
                 ]
             )
         }
+
+        targets.append(contentsOf: appTargets)
+        return targets
     }
 
     private static func visibleWindows(
@@ -140,20 +196,37 @@ enum ShareableContentCatalog {
         }
     }
 
+    private static func primaryDisplay(in displays: [SCDisplay]) -> SCDisplay? {
+        displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? displays.first
+    }
+
     private static func overlapArea(for windows: [SCWindow], on display: SCDisplay) -> CGFloat {
         windows.reduce(0) { partialResult, window in
             partialResult + window.frame.intersection(display.frame).area
         }
     }
 
-    private static func parseTargetID(_ targetID: String) -> Int? {
+    private static func parseTargetID(_ targetID: String) -> TargetSelection? {
         let parts = targetID.split(separator: ":", omittingEmptySubsequences: false)
         guard parts.count == 2, parts[0] == Substring(systemAudioProviderID) else {
             return nil
         }
 
-        return Int(parts[1])
+        if parts[1] == "system" {
+            return .system
+        }
+
+        guard let pid = Int(parts[1]) else {
+            return nil
+        }
+
+        return .application(pid: pid)
     }
+}
+
+private enum TargetSelection {
+    case system
+    case application(pid: Int)
 }
 
 private extension CGRect {

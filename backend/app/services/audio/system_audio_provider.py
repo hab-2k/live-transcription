@@ -76,7 +76,7 @@ class ScreenCaptureKitSystemAudioProvider:
             )
 
         try:
-            binary = _find_binary()
+            return self._run_status_command("--status")
         except FileNotFoundError as exc:
             return SystemAudioProviderStatus(
                 provider=PROVIDER_SCREEN_CAPTURE_KIT,
@@ -84,34 +84,18 @@ class ScreenCaptureKitSystemAudioProvider:
                 message=str(exc),
             )
 
+    def request_permission(self) -> SystemAudioProviderStatus:
+        if sys.platform != "darwin":
+            return self.get_status()
+
         try:
-            result = subprocess.run(
-                [binary, "--status"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-        except subprocess.TimeoutExpired:
+            return self._run_status_command("--request-permission")
+        except FileNotFoundError as exc:
             return SystemAudioProviderStatus(
                 provider=PROVIDER_SCREEN_CAPTURE_KIT,
                 state="error",
-                message="Timed out while checking system audio status.",
+                message=str(exc),
             )
-
-        if result.returncode != 0:
-            message = result.stderr.strip() or "System audio status command failed."
-            return SystemAudioProviderStatus(
-                provider=PROVIDER_SCREEN_CAPTURE_KIT,
-                state="error",
-                message=message,
-            )
-
-        payload = json.loads(result.stdout)
-        return SystemAudioProviderStatus(
-            provider=str(payload.get("provider", PROVIDER_SCREEN_CAPTURE_KIT)),
-            state=str(payload.get("state", "error")),
-            message=str(payload.get("message", "")),
-        )
 
     def list_targets(self) -> list[SystemAudioTarget]:
         if sys.platform != "darwin":
@@ -263,3 +247,35 @@ class ScreenCaptureKitSystemAudioProvider:
                 logger.info("system-audio-capture: %s", line.decode("utf-8", errors="replace").rstrip())
         except asyncio.CancelledError:
             raise
+
+    def _run_status_command(self, *args: str) -> SystemAudioProviderStatus:
+        binary = _find_binary()
+
+        try:
+            result = subprocess.run(
+                [binary, *args],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            return SystemAudioProviderStatus(
+                provider=PROVIDER_SCREEN_CAPTURE_KIT,
+                state="error",
+                message="Timed out while checking system audio status.",
+            )
+
+        if result.returncode != 0:
+            message = result.stderr.strip() or "System audio status command failed."
+            return SystemAudioProviderStatus(
+                provider=PROVIDER_SCREEN_CAPTURE_KIT,
+                state="error",
+                message=message,
+            )
+
+        payload = json.loads(result.stdout)
+        return SystemAudioProviderStatus(
+            provider=str(payload.get("provider", PROVIDER_SCREEN_CAPTURE_KIT)),
+            state=str(payload.get("state", "error")),
+            message=str(payload.get("message", "")),
+        )

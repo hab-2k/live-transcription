@@ -29,6 +29,25 @@ device_service = DeviceService()
 system_audio_provider = ScreenCaptureKitSystemAudioProvider()
 
 
+def serialize_system_audio() -> dict[str, object]:
+    status = system_audio_provider.get_status()
+    targets = system_audio_provider.list_targets()
+    return {
+        "provider": status.provider,
+        "state": status.state,
+        "message": status.message,
+        "targets": [
+            {
+                "id": target.id,
+                "name": target.name,
+                "kind": target.kind,
+                "icon_hint": target.icon_hint,
+            }
+            for target in targets
+        ],
+    }
+
+
 def build_prompt_builder(persona: str) -> PromptBuilder:
     path = PERSONA_DIR / f"{persona}.yaml"
     if not path.is_file():
@@ -90,7 +109,13 @@ def list_devices() -> list[dict[str, str]]:
 @router.get("/api/system-audio")
 def get_system_audio() -> dict[str, object]:
     logger.info("system_audio requested")
-    status = system_audio_provider.get_status()
+    return serialize_system_audio()
+
+
+@router.post("/api/system-audio/request-permission")
+def request_system_audio_permission() -> dict[str, object]:
+    logger.info("system_audio permission requested")
+    status = system_audio_provider.request_permission()
     targets = system_audio_provider.list_targets()
     return {
         "provider": status.provider,
@@ -106,6 +131,8 @@ def get_system_audio() -> dict[str, object]:
             for target in targets
         ],
     }
+
+
 @router.post("/api/sessions", status_code=201)
 async def start_session(config: SessionConfig) -> dict[str, str]:
     provider_name = configured_provider_name(config)

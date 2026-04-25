@@ -56,12 +56,7 @@ final class ScreenCaptureKitAudioCapture: NSObject, SCStreamOutput, SCStreamDele
         configuration.channelCount = 1
         configuration.excludesCurrentProcessAudio = true
 
-        let filter = SCContentFilter(
-            display: resolvedTarget.display,
-            including: [resolvedTarget.application],
-            exceptingWindows: []
-        )
-        let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
+        let stream = SCStream(filter: resolvedTarget.filter, configuration: configuration, delegate: self)
         self.stream = stream
 
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: outputQueue)

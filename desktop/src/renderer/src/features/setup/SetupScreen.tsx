@@ -1,6 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 
-import { getBackendUrl, getSystemAudio } from "../../lib/api/client";
+import {
+  getBackendUrl,
+  getSystemAudio,
+  requestSystemAudioPermission,
+} from "../../lib/api/client";
 import {
   createDefaultTranscriptionConfig,
   type CaptureMode,
@@ -31,6 +35,7 @@ export function SetupScreen({
   const [systemAudio, setSystemAudio] = useState<SystemAudioAvailability | null>(null);
   const [selectedTargetId, setSelectedTargetId] = useState("");
   const [loading, setLoading] = useState(true);
+  const [requestingPermission, setRequestingPermission] = useState(false);
   const [captureMode, setCaptureMode] = useState<CaptureMode>("mic_plus_system");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [transcription, setTranscription] = useState(createDefaultTranscriptionConfig("mic_plus_system"));
@@ -46,12 +51,29 @@ export function SetupScreen({
     ]).finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    setSelectedTargetId((current) => {
+      const targets = systemAudio?.targets ?? [];
+      if (targets.length === 0) {
+        return "";
+      }
+
+      if (targets.some((target) => target.id === current)) {
+        return current;
+      }
+
+      return targets.find((target) => target.kind === "system")?.id ?? "";
+    });
+  }, [systemAudio]);
+
   const microphones = devices.filter((d) => d.kind === "input");
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const formData = new FormData(event.currentTarget);
+    const fallbackTargetId =
+      selectedTargetId || systemAudio?.targets.find((target) => target.kind === "system")?.id || "";
 
     onStart({
       captureMode,
@@ -59,11 +81,11 @@ export function SetupScreen({
       microphoneDeviceId: String(formData.get("microphone_device_id") ?? ""),
       transcription,
       ...(captureMode === "mic_plus_system" &&
-        selectedTargetId &&
+        fallbackTargetId &&
         systemAudio && {
           systemAudioSelection: {
             provider: systemAudio.provider,
-            targetId: selectedTargetId,
+            targetId: fallbackTargetId,
           },
         }),
     });
@@ -91,6 +113,27 @@ export function SetupScreen({
           are managed in the backend environment.
         </p>
         {systemAudio?.message ? <p className="setup-copy">{systemAudio.message}</p> : null}
+        {systemAudio?.state === "permission_required" ? (
+          <div className="setup-actions">
+            <button
+              className="ghost-button setup-inline-button"
+              onClick={async () => {
+                setRequestingPermission(true);
+                try {
+                  setSystemAudio(await requestSystemAudioPermission(BACKEND_URL));
+                } catch {
+                  // Keep the current status visible if the permission request call fails.
+                } finally {
+                  setRequestingPermission(false);
+                }
+              }}
+              type="button"
+              disabled={requestingPermission}
+            >
+              {requestingPermission ? "Requesting..." : "Grant permission"}
+            </button>
+          </div>
+        ) : null}
         {errorMessage ? (
           <p className="setup-error" role="alert">
             {errorMessage}
