@@ -148,18 +148,35 @@ class SessionManager:
         await self.capture_service.stop()
         await self.runtime_controller.stop(runtime.provider)
 
-        if self.summary_service is not None:
+        summary = self._summaries.get(session_id)
+        if (
+            self.summary_service is not None
+            and runtime.prompt_builder is not None
+            and runtime.llm_client is not None
+        ):
             transcript = [
                 turn.model_dump()
                 for turn in self._latest_turn_snapshots(session_id)
                 if turn.is_final
             ]
-            self._summaries[session_id] = self.summary_service.build(transcript)
+            flags = [
+                event.model_dump()
+                for event in self._events.get(session_id, [])
+                if isinstance(event, RuleFlagEvent)
+            ]
+            summary = await self.summary_service.build(
+                transcript=transcript,
+                flags=flags,
+                prompt_builder=runtime.prompt_builder,
+                llm_client=runtime.llm_client,
+            )
+            if summary is not None:
+                self._summaries[session_id] = summary
 
         if self._active_session_id == session_id:
             self._active_session_id = None
         del self._runtimes[session_id]
-        return self._summaries.get(session_id)
+        return summary
 
     def list_events(self, session_id: str) -> list[SessionEvent]:
         return list(self._events.get(session_id, []))

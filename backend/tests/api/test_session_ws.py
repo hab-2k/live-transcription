@@ -6,12 +6,27 @@ from fastapi.testclient import TestClient
 from app.api.routes.session import session_manager
 from app.main import app
 from app.services.audio.device_service import DeviceService, AudioDevice
+from app.services.coaching.summary_service import CallSummary
 from tests.fakes.fake_capture import FakeCapture
 from tests.fakes.fake_provider import FakeProvider
 
 fake_device_service = DeviceService(devices=[
     AudioDevice(id="Built-in Microphone", label="Built-in Microphone", kind="input"),
 ])
+
+
+class SummaryLLMClient:
+    async def complete(self, *, prompt: str) -> dict[str, str]:
+        return {
+            "message": """
+            {
+              "recap": "The customer called about a payment query.",
+              "strengths": ["Polite opening."],
+              "weaknesses": ["Could have confirmed the resolution more clearly."],
+              "flagged_moments": ["The caller ended the call without a firm resolution."]
+            }
+            """
+        }
 
 
 def test_start_session_returns_session_id() -> None:
@@ -177,7 +192,7 @@ def test_start_session_returns_service_unavailable_when_parakeet_model_is_unconf
         )
 
     assert response.status_code == 503
-    assert "LTD_PARAKEET_MODEL_PATH" in response.json()["detail"]
+    assert response.json()["detail"] == "Parakeet model not found. Select a model in the transcription settings."
 
 
 def test_session_websocket_accepts_connections() -> None:
@@ -194,6 +209,7 @@ def test_stop_session_returns_backend_summary() -> None:
         patch("app.api.routes.session.session_manager.capture_service", FakeCapture()),
         patch("app.api.routes.session.session_manager.device_service", fake_device_service),
         patch("app.api.routes.session.session_manager.provider", FakeProvider()),
+        patch("app.api.routes.session.session_manager.llm_client_factory", return_value=SummaryLLMClient()),
     ):
         start_response = client.post(
             "/api/sessions",
@@ -210,8 +226,16 @@ def test_stop_session_returns_backend_summary() -> None:
         stop_response = client.post(f"/api/sessions/{session_id}/stop")
 
     assert stop_response.status_code == 200
-    assert stop_response.json()["status"] == "stopped"
-    assert stop_response.json()["summary"]["strengths"]
+    assert stop_response.json() == {
+        "status": "stopped",
+        "session_id": session_id,
+        "summary": CallSummary(
+            recap="The customer called about a payment query.",
+            strengths=["Polite opening."],
+            weaknesses=["Could have confirmed the resolution more clearly."],
+            flagged_moments=["The caller ended the call without a firm resolution."],
+        ).model_dump(),
+    }
 
 
 def test_pause_coaching_route_returns_session_state() -> None:
@@ -328,7 +352,7 @@ def test_start_session_uses_transcription_provider_selection() -> None:
         patch.object(
             session_manager,
             "provider_factory",
-            side_effect=lambda provider_name: providers[provider_name],
+            side_effect=lambda provider_name, model="": providers[provider_name],
             create=True,
         ),
     ):
