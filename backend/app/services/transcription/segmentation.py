@@ -10,10 +10,10 @@ class SegmentationPolicy:
     max_chars: int
 
     @classmethod
-    def for_capture_mode(cls, capture_mode: str) -> "SegmentationPolicy":
+    def for_capture_mode(cls, capture_mode: str, *, silence_finalize_ms: int | None = None) -> "SegmentationPolicy":
         if capture_mode == "mic_plus_blackhole":
-            return cls(capture_mode=capture_mode, silence_finalize_ms=400, max_chars=100)
-        return cls(capture_mode="mic_only", silence_finalize_ms=600, max_chars=120)
+            return cls(capture_mode=capture_mode, silence_finalize_ms=silence_finalize_ms or 400, max_chars=100)
+        return cls(capture_mode="mic_only", silence_finalize_ms=silence_finalize_ms or 600, max_chars=120)
 
     def should_finalize(self, *, current_text: str, silence_ms: int, source: str) -> bool:  # noqa: ARG002
         text = current_text.strip()

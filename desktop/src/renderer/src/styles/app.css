@@ -226,6 +226,10 @@ h3 {
   gap: 18px;
 }
 
+.transcript-panel--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .transcript-lane,
 .nudge-panel,
 .action-bar {

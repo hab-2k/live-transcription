@@ -40,6 +40,12 @@ export type StopSessionResponse = {
   } | null;
 };
 
+const EMPTY_SUMMARY = {
+  strengths: [],
+  missedOpportunities: [],
+  flaggedMoments: [],
+};
+
 type DesktopBridge = {
   backendUrl?: string;
 };
@@ -65,9 +71,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function serializeTranscriptionConfig(config: TranscriptionConfig) {
   return {
     provider: config.provider,
+    model: config.model,
     latency_preset: config.latencyPreset,
     segmentation: {
       policy: config.segmentation.policy,
+      ...(config.segmentation.silenceFinalizeMs != null && {
+        silence_finalize_ms: config.segmentation.silenceFinalizeMs,
+      }),
     },
     coaching: {
       window_policy: config.coaching.windowPolicy,
@@ -257,7 +267,7 @@ export async function setTranscriptionConfig(
 
 function normalizeSummary(summary: BackendSummary | null) {
   if (summary === null) {
-    return null;
+    return EMPTY_SUMMARY;
   }
 
   return {

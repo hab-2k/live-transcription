@@ -67,7 +67,7 @@ export function LiveScreen({
       </header>
 
       <section className="live-layout">
-        <TranscriptPanel transcript={state.transcript} />
+        <TranscriptPanel captureMode={state.setup.captureMode} transcript={state.transcript} />
 
         <aside className="live-sidepanel">
           <NudgePanel nudges={state.nudges} />

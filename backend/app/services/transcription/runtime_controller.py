@@ -84,4 +84,5 @@ class TranscriptionRuntimeController:
         if provider_factory is None:
             raise ValueError("No transcription provider factory configured")
 
-        return provider_factory(resolve_provider_name(config))
+        model = config.transcription.model if config.transcription else ""
+        return provider_factory(resolve_provider_name(config), model)

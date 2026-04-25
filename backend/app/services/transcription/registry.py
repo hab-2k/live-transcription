@@ -5,11 +5,11 @@ from app.services.transcription.nemo_provider import NemoStreamingProvider
 from app.services.transcription.parakeet_unified_provider import ParakeetUnifiedProvider
 
 
-def build_provider(provider_name: str, settings: Any) -> TranscriptionProvider:
+def build_provider(provider_name: str, settings: Any, model: str = "") -> TranscriptionProvider:
     if provider_name == "nemo":
         return NemoStreamingProvider(settings=settings)
 
     if provider_name == "parakeet_unified":
-        return ParakeetUnifiedProvider(settings=settings)
+        return ParakeetUnifiedProvider(settings=settings, model=model)
 
     raise ValueError(f"Unsupported provider: {provider_name}")

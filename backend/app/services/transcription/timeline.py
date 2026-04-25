@@ -52,10 +52,17 @@ class TranscriptTimelineAssembler:
             event_kind = "finalized" if update.is_final else "started"
         else:
             current.revision += 1
-            current.text = _merge_text(current.text, update.text)
-            event_kind = "finalized" if update.is_final else "updated"
             if update.is_final:
+                current.text = _merge_text(current.text, update.text)
                 self._open_turns.pop(update.stream_id, None)
+                event_kind = "finalized"
+            else:
+                # Partial updates carry the full running text from the
+                # provider (finalized + draft tokens combined).  The draft
+                # region is re-decoded each cycle and may change, so a
+                # prefix-based merge can mis-concatenate.  Replace outright.
+                current.text = update.text.strip()
+                event_kind = "updated"
 
         return normalize_turn_event(
             turn_id=current.turn_id,
@@ -65,4 +72,34 @@ class TranscriptTimelineAssembler:
             update=update,
             text=current.text,
             started_at=current.started_at,
+        )
+
+    def open_text(self, stream_id: str) -> str:
+        current = self._open_turns.get(stream_id)
+        return "" if current is None else current.text
+
+    def finalize_open_turn(
+        self,
+        *,
+        stream_id: str,
+        source: str,
+        role: str,
+        ended_at: str,
+        confidence: float = 0.0,
+    ) -> TranscriptTurnEvent | None:
+        current = self._open_turns.get(stream_id)
+        if current is None:
+            return None
+
+        return self.ingest(
+            ProviderTranscriptUpdate(
+                stream_id=stream_id,
+                source=source,
+                text=current.text,
+                is_final=True,
+                started_at=current.started_at,
+                ended_at=ended_at,
+                confidence=confidence,
+            ),
+            role=role,
         )

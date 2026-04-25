@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import math
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
@@ -22,7 +24,11 @@ from app.services.transcription.base import TranscriptChunk, TranscriptionProvid
 from app.services.transcription.provider_updates import ProviderTranscriptUpdate
 from app.services.transcription.normalizer import role_for_chunk
 from app.services.transcription.runtime_controller import TranscriptionRuntimeController
+from app.services.transcription.segmentation import SegmentationPolicy
 from app.services.transcription.timeline import TranscriptTimelineAssembler
+from app.services.transcription.vad import SileroVadService, VadDecision, VadService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -35,6 +41,11 @@ class SessionRuntime:
     provider: TranscriptionProvider | None = None
     emit_update: Callable[[ProviderTranscriptUpdate], Awaitable[None]] | None = None
     emit_event: Callable[[TranscriptChunk], Awaitable[None]] | None = None
+    segmentation_policy: SegmentationPolicy = field(
+        default_factory=lambda: SegmentationPolicy.for_capture_mode("mic_only")
+    )
+    vad_services: dict[str, VadService] = field(default_factory=dict)
+    forced_finalized_prefixes: dict[str, str] = field(default_factory=dict)
 
 
 class SessionManager:
@@ -43,7 +54,7 @@ class SessionManager:
         *,
         capture_service: CaptureService,
         provider: TranscriptionProvider | None = None,
-        provider_factory: Callable[[str], TranscriptionProvider] | None = None,
+        provider_factory: Callable[..., TranscriptionProvider] | None = None,
         broadcaster: EventBroadcaster,
         device_service: DeviceService | None = None,
         diarizer: Diarizer | None = None,
@@ -56,6 +67,7 @@ class SessionManager:
         summary_service: SummaryService | None = None,
         debug_store: DebugStore | None = None,
         runtime_controller: TranscriptionRuntimeController | None = None,
+        vad_service_factory: Callable[..., VadService] | None = None,
     ) -> None:
         self.capture_service = capture_service
         self.provider = provider
@@ -72,6 +84,7 @@ class SessionManager:
         self.summary_service = summary_service
         self.debug_store = debug_store
         self.runtime_controller = runtime_controller or TranscriptionRuntimeController()
+        self.vad_service_factory = vad_service_factory or self._build_vad_service
         self._events: dict[str, list[SessionEvent]] = defaultdict(list)
         self._runtimes: dict[str, SessionRuntime] = {}
         self._summaries: dict[str, CallSummary] = {}
@@ -91,6 +104,10 @@ class SessionManager:
             prompt_builder=self._create_prompt_builder(config),
             llm_client=self._create_llm_client(config),
             timeline=TranscriptTimelineAssembler(),
+            segmentation_policy=SegmentationPolicy.for_capture_mode(
+                config.capture_mode,
+                silence_finalize_ms=config.transcription.segmentation.silence_finalize_ms if config.transcription else None,
+            ),
         )
 
         async def emit_event(chunk: TranscriptChunk) -> None:
@@ -176,6 +193,12 @@ class SessionManager:
             emit_update=runtime.emit_update,
             emit_event=runtime.emit_event,
         )
+        runtime.segmentation_policy = SegmentationPolicy.for_capture_mode(
+            runtime.config.capture_mode,
+            silence_finalize_ms=runtime.config.transcription.segmentation.silence_finalize_ms if runtime.config.transcription else None,
+        )
+        runtime.vad_services.clear()
+        runtime.forced_finalized_prefixes.clear()
 
         status = SessionStatusEvent(status="transcription_reconfigured", session_id=session_id)
         self._events[session_id].append(status)
@@ -190,25 +213,49 @@ class SessionManager:
         if runtime is None or runtime.provider is None:
             return
 
-        await runtime.provider.push_audio(
-            source=frame.source,
-            pcm=frame.pcm,
-            sample_rate=frame.sample_rate,
-        )
+        vad_decision = self._detect_vad(runtime=runtime, frame=frame)
 
-        await self._emit_voice_activity(self._active_session_id, frame)
+        if vad_decision is None or vad_decision.active:
+            await runtime.provider.push_audio(
+                source=frame.source,
+                pcm=frame.pcm,
+                sample_rate=frame.sample_rate,
+            )
 
-    async def _emit_voice_activity(self, session_id: str, frame: AudioFrame) -> None:
+        if vad_decision is not None:
+            await self._maybe_finalize_turn_after_silence(
+                session_id=self._active_session_id,
+                runtime=runtime,
+                frame=frame,
+                vad_decision=vad_decision,
+            )
+
+        await self._emit_voice_activity(self._active_session_id, frame, vad_decision=vad_decision)
+
+    async def _emit_voice_activity(
+        self,
+        session_id: str,
+        frame: AudioFrame,
+        *,
+        vad_decision: VadDecision | None = None,
+    ) -> None:
         try:
             pcm = frame.pcm
             rms = float(math.sqrt(sum(float(s) ** 2 for s in pcm) / max(len(pcm), 1)))
         except (TypeError, ValueError):
             rms = 0.0
-        level = min(rms / 0.15, 1.0)
+
+        if vad_decision is not None:
+            level = max(0.0, min(vad_decision.speech_confidence, 1.0))
+            active = vad_decision.active
+        else:
+            level = min(rms / 0.15, 1.0)
+            active = rms >= self._vad_threshold
+
         event = VoiceActivityEvent(
             source=frame.source,
             level=round(level, 3),
-            active=rms >= self._vad_threshold,
+            active=active,
         )
         await self.broadcaster.publish(session_id, event.model_dump())
 
@@ -220,6 +267,10 @@ class SessionManager:
     ) -> None:
         runtime = self._runtimes.get(session_id)
         if runtime is None:
+            return
+
+        update = self._rewrite_update_after_forced_finalize(runtime=runtime, update=update)
+        if update is None:
             return
 
         chunk = TranscriptChunk(
@@ -341,3 +392,133 @@ class SessionManager:
         if self.llm_client_factory is not None:
             return self.llm_client_factory(config)
         return self.llm_client
+
+    def _detect_vad(self, *, runtime: SessionRuntime, frame: AudioFrame) -> VadDecision | None:
+        vad_service = self._get_vad_service(runtime=runtime, source=frame.source)
+        if vad_service is None:
+            return None
+        return vad_service.detect(frame.pcm, sample_rate=frame.sample_rate)
+
+    def _get_vad_service(self, *, runtime: SessionRuntime, source: str) -> VadService | None:
+        transcription = runtime.config.transcription
+        if transcription is None:
+            return None
+
+        vad_config = transcription.vad
+        if vad_config.provider == "disabled":
+            return None
+        if vad_config.provider != "silero_vad":
+            raise ValueError(f"Unsupported VAD provider: {vad_config.provider}")
+
+        service = runtime.vad_services.get(source)
+        if service is None:
+            service = self.vad_service_factory(
+                threshold=vad_config.threshold,
+                min_silence_ms=vad_config.min_silence_ms,
+            )
+            runtime.vad_services[source] = service
+        return service
+
+    async def _maybe_finalize_turn_after_silence(
+        self,
+        *,
+        session_id: str,
+        runtime: SessionRuntime,
+        frame: AudioFrame,
+        vad_decision: VadDecision,
+    ) -> None:
+        if vad_decision.active:
+            return
+
+        current_text = runtime.timeline.open_text(frame.source)
+        if not current_text:
+            return
+        if not runtime.segmentation_policy.should_finalize(
+            current_text=current_text,
+            silence_ms=vad_decision.silence_ms,
+            source=frame.source,
+        ):
+            return
+
+        provider_finalize = getattr(runtime.provider, "finalize_utterance", None)
+        if callable(provider_finalize):
+            flushed = await provider_finalize(source=frame.source)
+            if flushed:
+                runtime.forced_finalized_prefixes.pop(frame.source, None)
+                return
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+        role = role_for_chunk(
+            chunk=TranscriptChunk(
+                source=frame.source,
+                text=current_text,
+                is_partial=False,
+                started_at=timestamp,
+                ended_at=timestamp,
+                confidence=0.0,
+            ),
+            capture_mode=runtime.config.capture_mode,
+        )
+        turn_event = runtime.timeline.finalize_open_turn(
+            stream_id=frame.source,
+            source=frame.source,
+            role=role,
+            ended_at=timestamp,
+            confidence=0.0,
+        )
+        if turn_event is None:
+            return
+
+        runtime.forced_finalized_prefixes[frame.source] = turn_event.text
+        self._events[session_id].append(turn_event)
+        await self.broadcaster.publish(session_id, turn_event.model_dump())
+
+        if turn_event.is_final:
+            await self._maybe_emit_coaching_events(session_id=session_id, current_turn=turn_event)
+
+    def _rewrite_update_after_forced_finalize(
+        self,
+        *,
+        runtime: SessionRuntime,
+        update: ProviderTranscriptUpdate,
+    ) -> ProviderTranscriptUpdate | None:
+        prefix = runtime.forced_finalized_prefixes.get(update.stream_id, "").strip()
+        if not prefix:
+            return update
+
+        trimmed = self._trim_forced_prefix(update.text, prefix)
+        if not trimmed:
+            logger.info("suppressing duplicate provider update after silence finalize: %r", update.text)
+            return None
+        if trimmed != update.text.strip():
+            runtime.forced_finalized_prefixes.pop(update.stream_id, None)
+            return ProviderTranscriptUpdate(
+                stream_id=update.stream_id,
+                source=update.source,
+                text=trimmed,
+                is_final=update.is_final,
+                started_at=update.started_at,
+                ended_at=update.ended_at,
+                confidence=update.confidence,
+                sequence_number=update.sequence_number,
+                metadata=update.metadata,
+            )
+
+        runtime.forced_finalized_prefixes.pop(update.stream_id, None)
+        return update
+
+    @staticmethod
+    def _trim_forced_prefix(text: str, prefix: str) -> str:
+        normalized_text = text.strip()
+        normalized_prefix = prefix.strip()
+        if not normalized_prefix:
+            return normalized_text
+        if normalized_text == normalized_prefix:
+            return ""
+        if normalized_text.startswith(normalized_prefix):
+            return normalized_text[len(normalized_prefix) :].lstrip()
+        return normalized_text
+
+    @staticmethod
+    def _build_vad_service(*, threshold: float, min_silence_ms: int) -> VadService:
+        return SileroVadService(threshold=threshold, min_silence_ms=min_silence_ms)

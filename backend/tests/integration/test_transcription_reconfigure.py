@@ -45,7 +45,7 @@ async def test_reconfiguring_transcription_preserves_finalized_turns_and_restart
     }
     manager = SessionManager(
         capture_service=FakeCapture(frames=[]),
-        provider_factory=lambda provider_name: providers[provider_name],
+        provider_factory=lambda provider_name, model="": providers[provider_name],
         broadcaster=EventBroadcaster(),
     )
 

@@ -7,6 +7,7 @@ describe("TranscriptPanel lanes", () => {
   it("renders separate colleague and customer transcript lanes", () => {
     render(
       <TranscriptPanel
+        captureMode="mic_plus_blackhole"
         transcript={[
           {
             type: "transcript_turn",

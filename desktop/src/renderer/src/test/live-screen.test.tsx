@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LiveScreen } from "../features/live/LiveScreen";
 import type { SessionState } from "../lib/state/sessionReducer";
@@ -59,6 +59,7 @@ const stateWithTranscript: SessionState = {
     microphoneDeviceId: "Test Mic",
     transcription: {
       provider: "parakeet_unified",
+      model: "mlx-community/parakeet-tdt-0.6b-v2",
       latencyPreset: "balanced",
       segmentation: {
         policy: "source_turns",
@@ -76,6 +77,10 @@ const stateWithTranscript: SessionState = {
   summary: null,
 };
 
+afterEach(() => {
+  cleanup();
+});
+
 describe("LiveScreen", () => {
   it("renders transcript rows and pause/stop controls", () => {
     render(
@@ -91,6 +96,30 @@ describe("LiveScreen", () => {
     expect(screen.getByText(/customer audio/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /pause coaching/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /stop session/i })).toBeInTheDocument();
+  });
+
+  it("renders a single live transcript lane for mic-only sessions", () => {
+    render(
+      <LiveScreen
+        onApplyTranscription={vi.fn()}
+        state={{
+          ...stateWithTranscript,
+          setup: {
+            ...stateWithTranscript.setup,
+            captureMode: "mic_only",
+          },
+        }}
+        onPauseCoaching={vi.fn()}
+        onStopSession={vi.fn()}
+        onToggleDebug={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/live transcript/i)).toBeInTheDocument();
+    expect(screen.queryByText(/colleague audio/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/customer audio/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/thanks for calling/i)).toBeInTheDocument();
+    expect(screen.getByText(/i'm calling about a payment/i)).toBeInTheDocument();
   });
 
   it("applies advanced transcription settings from the live debug drawer", () => {

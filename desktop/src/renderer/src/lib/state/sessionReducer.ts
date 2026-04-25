@@ -64,6 +64,7 @@ type SessionAction =
 export function createDefaultTranscriptionConfig(captureMode: CaptureMode): TranscriptionConfig {
   return {
     provider: "parakeet_unified",
+    model: "mlx-community/parakeet-tdt-0.6b-v2",
     latencyPreset: "balanced",
     segmentation: {
       policy: captureMode === "mic_only" ? "fixed_lines" : "source_turns",

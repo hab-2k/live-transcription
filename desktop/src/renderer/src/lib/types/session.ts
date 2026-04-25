@@ -6,11 +6,15 @@ export type TranscriptionSegmentationPolicy = "source_turns" | "fixed_lines";
 export type TranscriptionCoachingWindowPolicy = "finalized_turns" | "recent_text";
 export type TranscriptionVadProvider = "silero_vad" | "disabled";
 
+export type TranscriptionModel = "mlx-community/parakeet-tdt-0.6b-v2";
+
 export type TranscriptionConfig = {
   provider: TranscriptionProvider;
+  model: TranscriptionModel;
   latencyPreset: TranscriptionLatencyPreset;
   segmentation: {
     policy: TranscriptionSegmentationPolicy;
+    silenceFinalizeMs?: number;
   };
   coaching: {
     windowPolicy: TranscriptionCoachingWindowPolicy;

@@ -29,6 +29,22 @@ export function TranscriptionSettingsFields({
       </label>
 
       <label className="field">
+        <span>Model</span>
+        <select
+          aria-label="Transcription model"
+          onChange={(event) =>
+            onChange({
+              ...config,
+              model: event.target.value as TranscriptionConfig["model"],
+            })
+          }
+          value={config.model}
+        >
+          <option value="mlx-community/parakeet-tdt-0.6b-v2">Parakeet TDT 0.6B v2 (MLX)</option>
+        </select>
+      </label>
+
+      <label className="field">
         <span>Latency Preset</span>
         <select
           aria-label="Latency preset"
@@ -63,6 +79,27 @@ export function TranscriptionSettingsFields({
           <option value="source_turns">Source turns</option>
           <option value="fixed_lines">Fixed lines</option>
         </select>
+      </label>
+
+      <label className="field">
+        <span>Silence Finalize (ms)</span>
+        <input
+          aria-label="Silence finalize ms"
+          min="100"
+          onChange={(event) =>
+            onChange({
+              ...config,
+              segmentation: {
+                ...config.segmentation,
+                silenceFinalizeMs: Number(event.target.value) || undefined,
+              },
+            })
+          }
+          placeholder="600"
+          step="50"
+          type="number"
+          value={config.segmentation.silenceFinalizeMs ?? ""}
+        />
       </label>
 
       <label className="field">

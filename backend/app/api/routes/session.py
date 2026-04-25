@@ -50,16 +50,13 @@ def configured_provider_name(config: SessionConfig) -> str:
 
 def missing_model_detail(provider_name: str) -> str:
     if provider_name == "parakeet_unified":
-        return (
-            "Parakeet Unified is not configured. Set LTD_PARAKEET_MODEL_PATH "
-            "(or LTD_NEMO_MODEL_PATH as a fallback) to the local model artifact before starting a session."
-        )
+        return "Parakeet model not found. Select a model in the transcription settings."
 
     return "NeMo is not configured. Set LTD_NEMO_MODEL_PATH to the local .nemo file before starting a session."
 
 session_manager = SessionManager(
     capture_service=SoundDeviceCaptureService(),
-    provider_factory=lambda provider_name: build_provider(provider_name=provider_name, settings=settings),
+    provider_factory=lambda provider_name, model="": build_provider(provider_name=provider_name, settings=settings, model=model),
     broadcaster=broadcaster,
     device_service=device_service,
     diarizer=NoopDiarizer(),

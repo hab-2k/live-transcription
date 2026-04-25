@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from app.contracts.session import SessionConfig, TranscriptionConfig
+from app.services.audio.base import AudioFrame
 from app.services.coaching.nudge_service import NudgeService
 from app.services.coaching.rule_engine import RuleEngine
 from app.services.events.broadcaster import EventBroadcaster
@@ -128,6 +130,90 @@ class DeltaUpdatingProvider:
 
     async def stop(self) -> None:
         return None
+
+
+class RecordingProvider:
+    name = "recording"
+
+    def __init__(self) -> None:
+        self.push_calls: list[tuple[str, np.ndarray, int]] = []
+
+    async def start(self, *, emit_update=None, emit_event=None) -> None:  # noqa: ANN001
+        return None
+
+    async def push_audio(self, *, source: str, pcm, sample_rate: int) -> None:  # noqa: ANN001
+        self.push_calls.append((source, np.asarray(pcm, dtype=np.float32), sample_rate))
+
+    async def stop(self) -> None:
+        return None
+
+
+class PartialOnlyProvider:
+    name = "partial_only"
+
+    def __init__(self) -> None:
+        self._emit_update = None
+        self.push_calls = 0
+
+    async def start(self, *, emit_update=None, emit_event=None) -> None:  # noqa: ANN001
+        self._emit_update = emit_update
+
+    async def push_audio(self, *, source: str, pcm, sample_rate: int) -> None:  # noqa: ANN001
+        self.push_calls += 1
+        assert self._emit_update is not None
+        await self._emit_update(
+            ProviderTranscriptUpdate(
+                stream_id=source,
+                source=source,
+                text="Hello there",
+                is_final=False,
+                started_at="2026-04-24T08:00:00Z",
+                ended_at="2026-04-24T08:00:00Z",
+                confidence=0.9,
+            )
+        )
+
+    async def stop(self) -> None:
+        return None
+
+
+class FlushablePartialProvider(PartialOnlyProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.finalize_calls = 0
+
+    async def finalize_utterance(self, *, source: str) -> bool:
+        self.finalize_calls += 1
+        assert self._emit_update is not None
+        await self._emit_update(
+            ProviderTranscriptUpdate(
+                stream_id=source,
+                source=source,
+                text="Hello there",
+                is_final=True,
+                started_at="2026-04-24T08:00:00Z",
+                ended_at="2026-04-24T08:00:01Z",
+                confidence=0.95,
+            )
+        )
+        return True
+
+
+class FakeVadService:
+    def __init__(self, decisions: list[tuple[bool, float, int]]) -> None:
+        self._decisions = decisions
+        self._index = 0
+
+    def detect(self, frame: np.ndarray, *, sample_rate: int):  # noqa: ANN001, ARG002
+        active, speech_confidence, silence_ms = self._decisions[min(self._index, len(self._decisions) - 1)]
+        self._index += 1
+        from app.services.transcription.vad import VadDecision
+
+        return VadDecision(
+            active=active,
+            speech_confidence=speech_confidence,
+            silence_ms=silence_ms,
+        )
 
 
 @pytest.mark.asyncio
@@ -260,7 +346,7 @@ async def test_session_manager_rebuilds_provider_when_transcription_provider_cha
     }
     manager = SessionManager(
         capture_service=FakeCapture(frames=[]),
-        provider_factory=lambda provider_name: providers[provider_name],
+        provider_factory=lambda provider_name, model="": providers[provider_name],
         broadcaster=EventBroadcaster(),
     )
 
@@ -333,3 +419,203 @@ async def test_session_manager_accumulates_delta_provider_updates_into_one_turn(
 
     assert events[-1].text == "Thanks for calling"
     assert events[-1].is_final is True
+
+
+@pytest.mark.asyncio
+async def test_session_manager_uses_vad_to_gate_audio_before_provider() -> None:
+    provider = RecordingProvider()
+    manager = SessionManager(
+        capture_service=FakeCapture(
+            frames=[
+                AudioFrame(source="microphone", pcm=np.zeros(1024, dtype=np.float32), sample_rate=16_000),
+                AudioFrame(source="microphone", pcm=np.ones(1024, dtype=np.float32), sample_rate=16_000),
+            ]
+        ),
+        provider=provider,
+        broadcaster=EventBroadcaster(),
+        vad_service_factory=lambda **_: FakeVadService(
+            [
+                (False, 0.05, 700),
+                (True, 0.95, 0),
+            ]
+        ),
+    )
+
+    await manager.start_session(
+        SessionConfig(
+            capture_mode="mic_only",
+            microphone_device_id="Built-in Microphone",
+            persona="colleague_contact",
+            coaching_profile="empathy",
+            asr_provider="parakeet_unified",
+            transcription=TranscriptionConfig(
+                provider="parakeet_unified",
+                model="mlx-community/parakeet-tdt-0.6b-v2",
+                latency_preset="balanced",
+                segmentation={"policy": "fixed_lines"},
+                coaching={"window_policy": "finalized_turns"},
+                vad={
+                    "provider": "silero_vad",
+                    "threshold": 0.5,
+                    "min_silence_ms": 600,
+                },
+            ),
+        )
+    )
+
+    assert len(provider.push_calls) == 1
+    assert provider.push_calls[0][0] == "microphone"
+    assert provider.push_calls[0][2] == 16_000
+
+
+@pytest.mark.asyncio
+async def test_session_manager_force_finalizes_open_turn_after_silence() -> None:
+    provider = PartialOnlyProvider()
+    manager = SessionManager(
+        capture_service=FakeCapture(
+            frames=[
+                AudioFrame(source="microphone", pcm=np.ones(1024, dtype=np.float32), sample_rate=16_000),
+                AudioFrame(source="microphone", pcm=np.zeros(1024, dtype=np.float32), sample_rate=16_000),
+            ]
+        ),
+        provider=provider,
+        broadcaster=EventBroadcaster(),
+        vad_service_factory=lambda **_: FakeVadService(
+            [
+                (True, 0.95, 0),
+                (False, 0.05, 700),
+            ]
+        ),
+    )
+
+    session_id = await manager.start_session(
+        SessionConfig(
+            capture_mode="mic_only",
+            microphone_device_id="Built-in Microphone",
+            persona="colleague_contact",
+            coaching_profile="empathy",
+            asr_provider="parakeet_unified",
+            transcription=TranscriptionConfig(
+                provider="parakeet_unified",
+                model="mlx-community/parakeet-tdt-0.6b-v2",
+                latency_preset="balanced",
+                segmentation={"policy": "fixed_lines"},
+                coaching={"window_policy": "finalized_turns"},
+                vad={
+                    "provider": "silero_vad",
+                    "threshold": 0.5,
+                    "min_silence_ms": 600,
+                },
+            ),
+        )
+    )
+
+    events = [
+        event for event in manager.list_events(session_id) if getattr(event, "type", None) == "transcript_turn"
+    ]
+
+    assert [event.event for event in events] == ["started", "finalized"]
+    assert [event.text for event in events] == ["Hello there", "Hello there"]
+    assert [event.is_final for event in events] == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_session_manager_does_not_finalize_while_vad_is_still_active() -> None:
+    provider = PartialOnlyProvider()
+    manager = SessionManager(
+        capture_service=FakeCapture(
+            frames=[
+                AudioFrame(source="microphone", pcm=np.ones(1024, dtype=np.float32), sample_rate=16_000),
+                AudioFrame(source="microphone", pcm=np.zeros(1024, dtype=np.float32), sample_rate=16_000),
+            ]
+        ),
+        provider=provider,
+        broadcaster=EventBroadcaster(),
+        vad_service_factory=lambda **_: FakeVadService(
+            [
+                (True, 0.95, 0),
+                (True, 0.05, 700),
+            ]
+        ),
+    )
+
+    session_id = await manager.start_session(
+        SessionConfig(
+            capture_mode="mic_only",
+            microphone_device_id="Built-in Microphone",
+            persona="colleague_contact",
+            coaching_profile="empathy",
+            asr_provider="parakeet_unified",
+            transcription=TranscriptionConfig(
+                provider="parakeet_unified",
+                model="mlx-community/parakeet-tdt-0.6b-v2",
+                latency_preset="balanced",
+                segmentation={"policy": "fixed_lines"},
+                coaching={"window_policy": "finalized_turns"},
+                vad={
+                    "provider": "silero_vad",
+                    "threshold": 0.5,
+                    "min_silence_ms": 700,
+                },
+            ),
+        )
+    )
+
+    events = [
+        event for event in manager.list_events(session_id) if getattr(event, "type", None) == "transcript_turn"
+    ]
+
+    assert [event.event for event in events] == ["started", "updated"]
+    assert all(event.is_final is False for event in events)
+
+
+@pytest.mark.asyncio
+async def test_session_manager_uses_provider_utterance_finalize_when_available() -> None:
+    provider = FlushablePartialProvider()
+    manager = SessionManager(
+        capture_service=FakeCapture(
+            frames=[
+                AudioFrame(source="microphone", pcm=np.ones(1024, dtype=np.float32), sample_rate=16_000),
+                AudioFrame(source="microphone", pcm=np.zeros(1024, dtype=np.float32), sample_rate=16_000),
+            ]
+        ),
+        provider=provider,
+        broadcaster=EventBroadcaster(),
+        vad_service_factory=lambda **_: FakeVadService(
+            [
+                (True, 0.95, 0),
+                (False, 0.05, 700),
+            ]
+        ),
+    )
+
+    session_id = await manager.start_session(
+        SessionConfig(
+            capture_mode="mic_only",
+            microphone_device_id="Built-in Microphone",
+            persona="colleague_contact",
+            coaching_profile="empathy",
+            asr_provider="parakeet_unified",
+            transcription=TranscriptionConfig(
+                provider="parakeet_unified",
+                model="mlx-community/parakeet-tdt-0.6b-v2",
+                latency_preset="balanced",
+                segmentation={"policy": "fixed_lines"},
+                coaching={"window_policy": "finalized_turns"},
+                vad={
+                    "provider": "silero_vad",
+                    "threshold": 0.5,
+                    "min_silence_ms": 600,
+                },
+            ),
+        )
+    )
+
+    events = [
+        event for event in manager.list_events(session_id) if getattr(event, "type", None) == "transcript_turn"
+    ]
+
+    assert provider.finalize_calls == 1
+    assert [event.event for event in events] == ["started", "finalized"]
+    assert [event.text for event in events] == ["Hello there", "Hello there"]
+    assert [event.is_final for event in events] == [False, True]

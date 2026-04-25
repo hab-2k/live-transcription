@@ -1,6 +1,8 @@
+import type { CaptureMode } from "../../lib/state/sessionReducer";
 import type { TranscriptTurnEvent } from "../../lib/types/session";
 
 type TranscriptPanelProps = {
+  captureMode: CaptureMode;
   transcript: TranscriptTurnEvent[];
 };
 
@@ -41,7 +43,19 @@ function Lane({
   );
 }
 
-export function TranscriptPanel({ transcript }: TranscriptPanelProps) {
+export function TranscriptPanel({ captureMode, transcript }: TranscriptPanelProps) {
+  if (captureMode === "mic_only") {
+    return (
+      <section className="transcript-panel transcript-panel--single">
+        <Lane
+          emptyCopy="Waiting for live transcript."
+          rows={transcript}
+          title="Live Transcript"
+        />
+      </section>
+    );
+  }
+
   const colleagueRows = transcript.filter((row) => row.role === "colleague");
   const customerRows = transcript.filter((row) => row.role === "customer");
   const sharedRows = transcript.filter((row) => row.role === "shared" || row.role === "unknown");

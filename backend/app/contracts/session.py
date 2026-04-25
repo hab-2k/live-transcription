@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 class TranscriptionSegmentationConfig(BaseModel):
     policy: str
+    silence_finalize_ms: int | None = None
 
 
 class TranscriptionCoachingConfig(BaseModel):
@@ -19,6 +20,7 @@ class TranscriptionVadConfig(BaseModel):
 
 class TranscriptionConfig(BaseModel):
     provider: str
+    model: str = ""
     latency_preset: str
     segmentation: TranscriptionSegmentationConfig
     coaching: TranscriptionCoachingConfig

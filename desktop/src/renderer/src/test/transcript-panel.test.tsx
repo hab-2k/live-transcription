@@ -4,9 +4,10 @@ import { describe, expect, it } from "vitest";
 import { TranscriptPanel } from "../features/live/TranscriptPanel";
 
 describe("TranscriptPanel", () => {
-  it("shows shared audio rows for mic-only mode without diarization", () => {
+  it("shows a live transcript lane for mic-only mode", () => {
     render(
       <TranscriptPanel
+        captureMode="mic_only"
         transcript={[
           {
             type: "transcript_turn",
@@ -25,12 +26,13 @@ describe("TranscriptPanel", () => {
       />,
     );
 
-    expect(screen.getByText(/shared audio/i)).toBeInTheDocument();
+    expect(screen.getByText(/live transcript/i)).toBeInTheDocument();
   });
 
   it("marks non-final transcript turns as provisional rows", () => {
     const { container } = render(
       <TranscriptPanel
+        captureMode="mic_only"
         transcript={[
           {
             type: "transcript_turn",

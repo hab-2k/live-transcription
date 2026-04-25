@@ -54,7 +54,49 @@ class SileroVadService:
         return load_silero_vad()
 
     def _score(self, frame: np.ndarray, *, sample_rate: int) -> float:
-        result = self._model(frame, sample_rate)
-        if hasattr(result, "item"):
-            return float(result.item())
-        return float(result)
+        try:
+            import torch
+        except ImportError:
+            torch = None
+
+        scores: list[float] = []
+        for chunk in self._iter_model_chunks(frame, sample_rate=sample_rate, torch_module=torch):
+            result = self._model(chunk, sample_rate)
+            if hasattr(result, "item"):
+                scores.append(float(result.item()))
+            else:
+                scores.append(float(result))
+
+        if not scores:
+            return 0.0
+        return max(scores)
+
+    @staticmethod
+    def _iter_model_chunks(frame: np.ndarray, *, sample_rate: int, torch_module: Any | None):
+        chunk_size = SileroVadService._chunk_size(sample_rate)
+        samples = np.asarray(frame, dtype=np.float32).reshape(-1)
+        if samples.size == 0:
+            return
+
+        remainder = samples.size % chunk_size
+        if remainder:
+            pad_width = chunk_size - remainder
+            samples = np.pad(samples, (0, pad_width))
+
+        for start in range(0, samples.size, chunk_size):
+            chunk = samples[start : start + chunk_size]
+            if torch_module is not None:
+                yield torch_module.as_tensor(chunk)
+            else:
+                yield chunk
+
+    @staticmethod
+    def _chunk_size(sample_rate: int) -> int:
+        if sample_rate == 16_000:
+            return 512
+        if sample_rate == 8_000:
+            return 256
+        raise ValueError(
+            "Silero VAD supports 8000 Hz and 16000 Hz audio only; "
+            f"received {sample_rate} Hz"
+        )

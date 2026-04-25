@@ -116,6 +116,7 @@ describe("parseSessionEvent", () => {
           asr_provider: "parakeet_unified",
           transcription: {
             provider: "parakeet_unified",
+            model: "mlx-community/parakeet-tdt-0.6b-v2",
             latency_preset: "balanced",
             segmentation: { policy: "fixed_lines" },
             coaching: { window_policy: "finalized_turns" },
@@ -158,6 +159,7 @@ describe("parseSessionEvent", () => {
       "session-123",
       {
         provider: "nemo",
+        model: "mlx-community/parakeet-tdt-0.6b-v2",
         latencyPreset: "balanced",
         segmentation: { policy: "source_turns" },
         coaching: { windowPolicy: "finalized_turns" },
@@ -177,6 +179,7 @@ describe("parseSessionEvent", () => {
         method: "POST",
         body: JSON.stringify({
           provider: "nemo",
+          model: "mlx-community/parakeet-tdt-0.6b-v2",
           latency_preset: "balanced",
           segmentation: { policy: "source_turns" },
           coaching: { window_policy: "finalized_turns" },
