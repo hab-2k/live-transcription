@@ -1,0 +1,14 @@
+backend/.venv/
+backend/.pytest_cache/
+desktop/node_modules/
+/.pnpm-store/
+desktop/dist/
+desktop/dist-electron/
+desktop/.vite/
+.cache/
+.superpowers/
+.worktrees/
+*.log
+.env
+.env.*
+!.env.example
