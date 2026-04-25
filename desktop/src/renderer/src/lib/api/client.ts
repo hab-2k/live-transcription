@@ -4,6 +4,7 @@ import type {
   RuleFlagEvent,
   SessionEvent,
   SessionStatusEvent,
+  SystemAudioAvailability,
   TranscriptionConfig,
   TranscriptEvent,
   TranscriptTurnEvent,
@@ -78,6 +79,30 @@ function serializeTranscriptionConfig(config: TranscriptionConfig) {
       threshold: config.vad.threshold,
       min_silence_ms: config.vad.minSilenceMs,
     },
+  };
+}
+
+function normalizeSystemAudioAvailability(payload: {
+  provider: string;
+  state: string;
+  message: string;
+  targets: Array<{
+    id: string;
+    name: string;
+    kind: string;
+    icon_hint: string | null;
+  }>;
+}): SystemAudioAvailability {
+  return {
+    provider: payload.provider,
+    state: payload.state as SystemAudioAvailability["state"],
+    message: payload.message,
+    targets: payload.targets.map((target) => ({
+      id: target.id,
+      name: target.name,
+      kind: target.kind,
+      iconHint: target.icon_hint,
+    })),
   };
 }
 
@@ -211,6 +236,23 @@ export function connectSessionEvents(
   return () => socket.close();
 }
 
+export async function getSystemAudio(baseUrl: string): Promise<SystemAudioAvailability> {
+  const response = await fetch(`${baseUrl}/api/system-audio`);
+  const payload = await readJsonResponse<{
+    provider: string;
+    state: string;
+    message: string;
+    targets: Array<{
+      id: string;
+      name: string;
+      kind: string;
+      icon_hint: string | null;
+    }>;
+  }>(response);
+
+  return normalizeSystemAudioAvailability(payload);
+}
+
 export async function startSession(
   setup: SessionSetup,
   baseUrl: string,
@@ -225,7 +267,12 @@ export async function startSession(
       coaching_profile: "empathy",
       asr_provider: setup.transcription.provider,
       transcription: serializeTranscriptionConfig(setup.transcription),
-      ...(setup.systemAudioPid != null && { system_audio_pid: setup.systemAudioPid }),
+      ...(setup.systemAudioSelection && {
+        system_audio_selection: {
+          provider: setup.systemAudioSelection.provider,
+          target_id: setup.systemAudioSelection.targetId,
+        },
+      }),
     }),
   });
   return readJsonResponse<StartSessionResponse>(response);

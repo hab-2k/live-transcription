@@ -5,11 +5,38 @@ import { SetupScreen } from "../features/setup/SetupScreen";
 
 describe("SetupScreen", () => {
   beforeEach(() => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      json: () =>
-        Promise.resolve([
-          { id: "Test Mic", label: "Test Mic", kind: "input" },
-        ]),
+    globalThis.fetch = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/devices")) {
+        return Promise.resolve({
+          json: () =>
+            Promise.resolve([
+              { id: "Test Mic", label: "Test Mic", kind: "input" },
+            ]),
+        });
+      }
+
+      if (url.endsWith("/api/system-audio")) {
+        return Promise.resolve({
+          json: () =>
+            Promise.resolve({
+              provider: "screen_capture_kit",
+              state: "available",
+              message: "Ready to capture system audio.",
+              targets: [
+                {
+                  id: "screen_capture_kit:1234",
+                  name: "Microsoft Teams",
+                  kind: "application",
+                  icon_hint: null,
+                },
+              ],
+            }),
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
     }) as unknown as typeof fetch;
   });
 
@@ -33,7 +60,12 @@ describe("SetupScreen", () => {
     fireEvent.change(screen.getByLabelText(/vad minimum silence/i), {
       target: { value: "900" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /start session/i }));
+    const startButton = screen.getAllByRole("button", { name: /start session/i }).at(-1);
+    if (!startButton) {
+      throw new Error("Start session button not found");
+    }
+
+    fireEvent.click(startButton);
 
     expect(screen.getByLabelText(/capture mode/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/persona/i)).toBeInTheDocument();
@@ -45,6 +77,40 @@ describe("SetupScreen", () => {
             minSilenceMs: 900,
           }),
         }),
+      }),
+    );
+  });
+
+  it("renders provider status and submits the selected system audio target", async () => {
+    const onStart = vi.fn();
+
+    render(<SetupScreen onStart={onStart} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Ready to capture system audio.")).toBeInTheDocument();
+    });
+
+    const targetSelect = screen.getAllByLabelText(/target application/i).at(-1);
+    if (!targetSelect) {
+      throw new Error("Target application select not found");
+    }
+
+    fireEvent.change(targetSelect, {
+      target: { value: "screen_capture_kit:1234" },
+    });
+    const startButton = screen.getAllByRole("button", { name: /start session/i }).at(-1);
+    if (!startButton) {
+      throw new Error("Start session button not found");
+    }
+
+    fireEvent.click(startButton);
+
+    expect(onStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemAudioSelection: {
+          provider: "screen_capture_kit",
+          targetId: "screen_capture_kit:1234",
+        },
       }),
     );
   });

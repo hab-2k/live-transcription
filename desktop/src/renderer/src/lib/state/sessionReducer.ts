@@ -2,6 +2,7 @@ import type {
   CoachingNudgeEvent,
   RuleFlagEvent,
   SessionEvent,
+  SystemAudioSelection,
   TranscriptionConfig,
   TranscriptTurnEvent,
   VoiceActivityEvent,
@@ -15,7 +16,7 @@ export type SessionSetup = {
   persona: Persona;
   microphoneDeviceId: string;
   transcription: TranscriptionConfig;
-  systemAudioPid?: number;
+  systemAudioSelection?: SystemAudioSelection;
 };
 
 export type SummaryView = {

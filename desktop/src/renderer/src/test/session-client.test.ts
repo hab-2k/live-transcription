@@ -131,6 +131,57 @@ describe("parseSessionEvent", () => {
     );
   });
 
+  it("posts provider-backed system audio selection when present", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ session_id: "session-456" }),
+    }) as unknown as typeof fetch;
+
+    await startSession(
+      {
+        captureMode: "mic_plus_system",
+        persona: "manager",
+        microphoneDeviceId: "Test Mic",
+        transcription: createDefaultTranscriptionConfig("mic_plus_system"),
+        systemAudioSelection: {
+          provider: "screen_capture_kit",
+          targetId: "screen_capture_kit:1234",
+        },
+      },
+      "http://localhost:8000",
+    );
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://localhost:8000/api/sessions",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          capture_mode: "mic_plus_system",
+          microphone_device_id: "Test Mic",
+          persona: "manager",
+          coaching_profile: "empathy",
+          asr_provider: "parakeet_unified",
+          transcription: {
+            provider: "parakeet_unified",
+            model: "mlx-community/parakeet-tdt-0.6b-v2",
+            latency_preset: "balanced",
+            segmentation: { policy: "source_turns" },
+            coaching: { window_policy: "finalized_turns" },
+            vad: {
+              provider: "silero_vad",
+              threshold: 0.5,
+              min_silence_ms: 600,
+            },
+          },
+          system_audio_selection: {
+            provider: "screen_capture_kit",
+            target_id: "screen_capture_kit:1234",
+          },
+        }),
+      }),
+    );
+  });
+
   it("posts pause state to the backend", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 from typing import Any
 
 import numpy as np
@@ -10,7 +9,6 @@ import sounddevice as sd
 
 from app.contracts.session import SessionConfig
 from app.services.audio.base import AudioFrame, AudioSink
-from app.services.audio.system_audio_capture import SystemAudioCaptureService
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +23,6 @@ class SoundDeviceCaptureService:
         self._on_audio: AudioSink | None = None
         self._config: SessionConfig | None = None
         self._streams: list[sd.InputStream] = []
-        self._system_capture: SystemAudioCaptureService | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
     async def start(self, config: SessionConfig, on_audio: AudioSink) -> None:
@@ -49,29 +46,16 @@ class SoundDeviceCaptureService:
         )
         self._streams.append(mic_stream)
 
-        if config.capture_mode == "mic_plus_system" and config.system_audio_pid is not None:
-            self._system_capture = SystemAudioCaptureService()
-            await self._system_capture.start(
-                pid=config.system_audio_pid,
-                sample_rate=SAMPLE_RATE,
-                on_audio=on_audio,
-            )
-
         for stream in self._streams:
             stream.start()
 
         logger.info(
-            "Capture started: mode=%s, streams=%d, system_pid=%s",
+            "Capture started: mode=%s, streams=%d",
             config.capture_mode,
             len(self._streams),
-            config.system_audio_pid,
         )
 
     async def stop(self) -> None:
-        if self._system_capture is not None:
-            await self._system_capture.stop()
-            self._system_capture = None
-
         for stream in self._streams:
             try:
                 stream.stop()

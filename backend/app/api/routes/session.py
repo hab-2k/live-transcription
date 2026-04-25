@@ -5,8 +5,10 @@ from fastapi import APIRouter, HTTPException, WebSocket
 
 from app.core.config import settings
 from app.contracts.session import CoachingPauseRequest, SessionConfig, TranscriptionConfig
+from app.services.audio.composite_capture import CompositeCaptureService
 from app.services.audio.device_service import DeviceService
 from app.services.audio.sounddevice_capture import SoundDeviceCaptureService
+from app.services.audio.system_audio_provider import ScreenCaptureKitSystemAudioProvider
 from app.services.coaching.llm_client import OpenAICompatibleClient
 from app.services.coaching.nudge_service import NudgeService
 from app.services.coaching.prompt_builder import PromptBuilder
@@ -16,7 +18,6 @@ from app.services.debug.debug_store import DebugStore
 from app.services.diarization.noop_diarizer import NoopDiarizer
 from app.services.events.broadcaster import broadcaster
 from app.services.session_manager import SessionManager
-from app.services.audio.system_audio_capture import list_capturable_apps
 from app.services.transcription.registry import build_provider
 
 router = APIRouter()
@@ -25,6 +26,7 @@ RULES_PATH = Path("backend/config/rules/default.yaml")
 logger = logging.getLogger(__name__)
 
 device_service = DeviceService()
+system_audio_provider = ScreenCaptureKitSystemAudioProvider()
 
 
 def build_prompt_builder(persona: str) -> PromptBuilder:
@@ -56,7 +58,10 @@ def missing_model_detail(provider_name: str) -> str:
     return "NeMo is not configured. Set LTD_NEMO_MODEL_PATH to the local .nemo file before starting a session."
 
 session_manager = SessionManager(
-    capture_service=SoundDeviceCaptureService(),
+    capture_service=CompositeCaptureService(
+        microphone_capture=SoundDeviceCaptureService(),
+        system_audio_provider=system_audio_provider,
+    ),
     provider_factory=lambda provider_name, model="": build_provider(provider_name=provider_name, settings=settings, model=model),
     broadcaster=broadcaster,
     device_service=device_service,
@@ -82,13 +87,25 @@ def list_devices() -> list[dict[str, str]]:
     return [{"id": d.id, "label": d.label, "kind": d.kind} for d in device_service.list_devices()]
 
 
-@router.get("/api/capturable-apps")
-def get_capturable_apps() -> list[dict[str, object]]:
-    logger.info("capturable_apps requested")
-    apps = list_capturable_apps()
-    return [{"name": a.name, "pid": a.pid, "bundle_id": a.bundle_id} for a in apps]
-
-
+@router.get("/api/system-audio")
+def get_system_audio() -> dict[str, object]:
+    logger.info("system_audio requested")
+    status = system_audio_provider.get_status()
+    targets = system_audio_provider.list_targets()
+    return {
+        "provider": status.provider,
+        "state": status.state,
+        "message": status.message,
+        "targets": [
+            {
+                "id": target.id,
+                "name": target.name,
+                "kind": target.kind,
+                "icon_hint": target.icon_hint,
+            }
+            for target in targets
+        ],
+    }
 @router.post("/api/sessions", status_code=201)
 async def start_session(config: SessionConfig) -> dict[str, str]:
     provider_name = configured_provider_name(config)

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.api.routes.session import session_manager
 from app.main import app
 from app.services.audio.device_service import DeviceService, AudioDevice
+from app.services.audio.system_audio_provider import SystemAudioProviderStatus, SystemAudioTarget
 from app.services.coaching.summary_service import CallSummary
 from tests.fakes.fake_capture import FakeCapture
 from tests.fakes.fake_provider import FakeProvider
@@ -50,6 +51,46 @@ def test_start_session_returns_session_id() -> None:
 
     assert response.status_code == 201
     assert "session_id" in response.json()
+
+
+def test_system_audio_route_returns_status_and_targets() -> None:
+    client = TestClient(app)
+
+    class FakeSystemAudioProvider:
+        def get_status(self) -> SystemAudioProviderStatus:
+            return SystemAudioProviderStatus(
+                provider="screen_capture_kit",
+                state="available",
+                message="Ready to capture system audio.",
+            )
+
+        def list_targets(self) -> list[SystemAudioTarget]:
+            return [
+                SystemAudioTarget(
+                    id="screen_capture_kit:1234",
+                    name="Microsoft Teams",
+                    kind="application",
+                    metadata={"pid": 1234},
+                )
+            ]
+
+    with patch("app.api.routes.session.system_audio_provider", FakeSystemAudioProvider()):
+        response = client.get("/api/system-audio")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider": "screen_capture_kit",
+        "state": "available",
+        "message": "Ready to capture system audio.",
+        "targets": [
+            {
+                "id": "screen_capture_kit:1234",
+                "name": "Microsoft Teams",
+                "kind": "application",
+                "icon_hint": None,
+            }
+        ],
+    }
 
 
 def test_start_session_passes_nested_transcription_config_to_session_manager() -> None:
@@ -209,7 +250,7 @@ def test_stop_session_returns_backend_summary() -> None:
         patch("app.api.routes.session.session_manager.capture_service", FakeCapture()),
         patch("app.api.routes.session.session_manager.device_service", fake_device_service),
         patch("app.api.routes.session.session_manager.provider", FakeProvider()),
-        patch("app.api.routes.session.session_manager.llm_client_factory", return_value=SummaryLLMClient()),
+        patch("app.api.routes.session.session_manager.summary_llm_client", SummaryLLMClient()),
     ):
         start_response = client.post(
             "/api/sessions",

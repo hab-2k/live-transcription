@@ -1,16 +1,16 @@
 import { useEffect, useState, type FormEvent } from "react";
 
-import { getBackendUrl } from "../../lib/api/client";
+import { getBackendUrl, getSystemAudio } from "../../lib/api/client";
 import {
   createDefaultTranscriptionConfig,
   type CaptureMode,
   type Persona,
   type SessionSetup,
 } from "../../lib/state/sessionReducer";
+import type { SystemAudioAvailability } from "../../lib/types/session";
 import { TranscriptionSettingsFields } from "../transcription/TranscriptionSettingsFields";
 
 type AudioDevice = { id: string; label: string; kind: string };
-type CapturableApp = { name: string; pid: number; bundle_id: string };
 
 type SetupScreenProps = {
   debugEnabled?: boolean;
@@ -28,8 +28,8 @@ export function SetupScreen({
   onStart,
 }: SetupScreenProps) {
   const [devices, setDevices] = useState<AudioDevice[]>([]);
-  const [capturableApps, setCapturableApps] = useState<CapturableApp[]>([]);
-  const [selectedAppPid, setSelectedAppPid] = useState<number | null>(null);
+  const [systemAudio, setSystemAudio] = useState<SystemAudioAvailability | null>(null);
+  const [selectedTargetId, setSelectedTargetId] = useState("");
   const [loading, setLoading] = useState(true);
   const [captureMode, setCaptureMode] = useState<CaptureMode>("mic_plus_system");
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -40,9 +40,8 @@ export function SetupScreen({
       fetch(`${BACKEND_URL}/api/devices`)
         .then((res) => res.json())
         .then((data: AudioDevice[]) => setDevices(data)),
-      fetch(`${BACKEND_URL}/api/capturable-apps`)
-        .then((res) => res.json())
-        .then((data: CapturableApp[]) => setCapturableApps(data))
+      getSystemAudio(BACKEND_URL)
+        .then((data) => setSystemAudio(data))
         .catch(() => {}),
     ]).finally(() => setLoading(false));
   }, []);
@@ -59,7 +58,14 @@ export function SetupScreen({
       persona: formData.get("persona") as Persona,
       microphoneDeviceId: String(formData.get("microphone_device_id") ?? ""),
       transcription,
-      ...(captureMode === "mic_plus_system" && selectedAppPid != null && { systemAudioPid: selectedAppPid }),
+      ...(captureMode === "mic_plus_system" &&
+        selectedTargetId &&
+        systemAudio && {
+          systemAudioSelection: {
+            provider: systemAudio.provider,
+            targetId: selectedTargetId,
+          },
+        }),
     });
   }
 
@@ -84,6 +90,7 @@ export function SetupScreen({
           Configure the call session and choose the coaching persona. Model and endpoint settings
           are managed in the backend environment.
         </p>
+        {systemAudio?.message ? <p className="setup-copy">{systemAudio.message}</p> : null}
         {errorMessage ? (
           <p className="setup-error" role="alert">
             {errorMessage}
@@ -137,14 +144,14 @@ export function SetupScreen({
               <select
                 name="system_audio_app"
                 onChange={(event) => {
-                  const pid = event.target.value ? Number(event.target.value) : null;
-                  setSelectedAppPid(pid);
+                  setSelectedTargetId(event.target.value);
                 }}
-                value={selectedAppPid ?? ""}
+                value={selectedTargetId}
+                disabled={systemAudio?.state !== "available"}
               >
                 <option value="">Select an application...</option>
-                {capturableApps.map((app) => (
-                  <option key={app.pid} value={app.pid}>
+                {systemAudio?.targets.map((app) => (
+                  <option key={app.id} value={app.id}>
                     {app.name}
                   </option>
                 ))}

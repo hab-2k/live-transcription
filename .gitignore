@@ -10,6 +10,8 @@ desktop/.vite/
 .worktrees/
 __pycache__/
 *.py[cod]
+.build/
+.swiftpm/
 *.log
 .env
 .env.*
