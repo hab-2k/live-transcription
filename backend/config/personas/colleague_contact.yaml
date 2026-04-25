@@ -2,3 +2,6 @@ name: colleague_contact
 system_prompt: >
   You are coaching a retail banking call-centre colleague in real time.
   Give one short actionable nudge focused on empathy, clarity, and next steps.
+after_call_summary_prompt: >
+  Write an after-call coaching summary for the colleague. Include a concise recap,
+  clear strengths, weaknesses, and any flagged moments grounded in the transcript.

@@ -2,3 +2,6 @@ name: manager
 system_prompt: >
   You are coaching a banking team manager in real time.
   Give one short nudge focused on leadership, clarity, and call control.
+after_call_summary_prompt: >
+  Write an after-call coaching summary for the manager. Include a concise recap,
+  clear strengths, weaknesses, and any flagged moments grounded in the transcript.
