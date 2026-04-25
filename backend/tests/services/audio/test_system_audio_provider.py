@@ -335,11 +335,57 @@ class TestProviderLifecycle:
         assert "--sample-rate" in cmd
         assert "24000" in cmd
 
+
     @pytest.mark.asyncio
     async def test_stop_is_idempotent(self) -> None:
         provider = ScreenCaptureKitSystemAudioProvider()
         await provider.stop()
         await provider.stop()
+
+    @pytest.mark.asyncio
+    async def test_start_forcefully_resets_when_already_running(self) -> None:
+        """A stuck running provider is reset on the next start instead of raising."""
+        provider = ScreenCaptureKitSystemAudioProvider()
+        # Simulate a stuck state from a previous partial start
+        fake_proc = MagicMock()
+        fake_proc.stdout = BytesIO(b"")
+        provider._process = fake_proc
+
+        with (
+            patch.object(
+                provider,
+                "get_status",
+                return_value=SystemAudioProviderStatus(
+                    provider=PROVIDER_SCREEN_CAPTURE_KIT,
+                    state="available",
+                    message="Ready to capture system audio.",
+                ),
+            ),
+            patch.object(
+                provider,
+                "list_targets",
+                return_value=[
+                    SystemAudioTarget(
+                        id="screen_capture_kit:1234",
+                        name="Teams",
+                        kind="application",
+                    )
+                ],
+            ),
+            patch("app.services.audio.system_audio_provider._find_binary", return_value="/fake/bin"),
+            patch("subprocess.Popen", return_value=fake_proc),
+        ):
+            # Second start should succeed (reset + restart), not raise RuntimeError
+            await provider.start(
+                selection=SystemAudioSelection(
+                    provider=PROVIDER_SCREEN_CAPTURE_KIT,
+                    target_id="screen_capture_kit:1234",
+                ),
+                sample_rate=SAMPLE_RATE,
+                on_audio=AsyncMock(),
+            )
+            await provider.stop()
+
 
 
 class TestReadLoop:

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from app.services.audio.base import AudioSink, CaptureService, SystemAudioProvider
 from app.services.audio.sounddevice_capture import SAMPLE_RATE
 from app.contracts.session import SessionConfig
+
+logger = logging.getLogger(__name__)
 
 
 class CompositeCaptureService:
@@ -35,5 +39,11 @@ class CompositeCaptureService:
             raise
 
     async def stop(self) -> None:
-        await self._system_audio_provider.stop()
-        await self._microphone_capture.stop()
+        try:
+            await self._system_audio_provider.stop()
+        except Exception:
+            logger.exception("System audio provider stop failed; continuing cleanup")
+        try:
+            await self._microphone_capture.stop()
+        except Exception:
+            logger.exception("Microphone capture stop failed")

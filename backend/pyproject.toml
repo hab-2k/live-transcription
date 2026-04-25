@@ -32,5 +32,9 @@ include-package-data = true
 where = ["."]
 
 [tool.pytest.ini_options]
+markers = [
+    "integration: marks integration tests that require real models/audio",
+    "slow: marks tests that are slow to run",
+]
 testpaths = ["tests"]
 asyncio_mode = "auto"

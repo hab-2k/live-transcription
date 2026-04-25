@@ -148,8 +148,13 @@ class ScreenCaptureKitSystemAudioProvider:
         if status.state != "available":
             raise ValueError(status.message)
 
+        # Safety: if the provider is stuck in a running state (previous start
+        # failed downstream without cleanup), forcefully reset before re-starting.
         if self._process is not None:
-            raise RuntimeError("System audio provider already running")
+            logger.warning(
+                "System audio provider already running; forcefully resetting before restart"
+            )
+            await self.stop()
 
         known_targets = {target.id for target in self.list_targets()}
         if selection.target_id not in known_targets:
@@ -180,30 +185,37 @@ class ScreenCaptureKitSystemAudioProvider:
         )
 
     async def stop(self) -> None:
-        if self._reader_task is not None:
-            self._reader_task.cancel()
-            try:
-                await self._reader_task
-            except asyncio.CancelledError:
-                pass
-            self._reader_task = None
-
-        if self._stderr_task is not None:
-            self._stderr_task.cancel()
-            try:
-                await self._stderr_task
-            except asyncio.CancelledError:
-                pass
-            self._stderr_task = None
-
+        # Terminate the process first so the read loop's stdout read returns
+        # empty data and exits cleanly.  Cancelling the task while it blocks
+        # on subprocess.stdout.read() can leave the underlying pipe orphaned.
         if self._process is not None:
             try:
                 self._process.terminate()
                 self._process.wait(timeout=3)
             except Exception:
                 self._process.kill()
-                self._process.wait(timeout=1)
+                try:
+                    self._process.wait(timeout=1)
+                except Exception:
+                    pass
             self._process = None
+
+        # Cancel reader after the process is gone
+        if self._reader_task is not None and not self._reader_task.done():
+            self._reader_task.cancel()
+            try:
+                await asyncio.wait_for(self._reader_task, timeout=5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            self._reader_task = None
+
+        if self._stderr_task is not None and not self._stderr_task.done():
+            self._stderr_task.cancel()
+            try:
+                await asyncio.wait_for(self._stderr_task, timeout=5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            self._stderr_task = None
 
         self._on_audio = None
 
@@ -234,7 +246,8 @@ class ScreenCaptureKitSystemAudioProvider:
             logger.exception("System audio read loop error")
 
     async def _drain_stderr(self) -> None:
-        assert self._process is not None
+        if self._process is None:
+            return
         if self._process.stderr is None:
             return
 
