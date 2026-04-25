@@ -46,7 +46,13 @@ class PromptBuilder:
         transcript_lines = "\n".join(
             f"{turn.get('role', 'unknown')}: {turn.get('text', '')}" for turn in transcript
         ) or "No transcript provided."
-        flag_lines = "\n".join(flag.get("message", "") for flag in flags) or "No flagged moments."
+        flag_lines = (
+            "\n".join(
+                f"{flag.get('code', 'unknown')}: {flag.get('message', '')}"
+                for flag in flags
+            )
+            or "No flagged moments."
+        )
 
         return (
             f"{system_prompt}\n"

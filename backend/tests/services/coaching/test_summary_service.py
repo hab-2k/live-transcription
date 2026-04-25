@@ -19,6 +19,30 @@ class FakeLLMClient:
         }
 
 
+def test_prompt_builder_after_call_summary_includes_persona_transcript_and_flags() -> None:
+    prompt_builder = PromptBuilder(
+        persona={
+            "name": "manager",
+            "system_prompt": "You coach a banking team manager in real time.",
+            "after_call_summary_prompt": "Write an after-call coaching summary for the manager.",
+        }
+    )
+
+    prompt = prompt_builder.build_after_call_summary(
+        transcript=[
+            {"role": "colleague", "text": "I will take ownership of this issue."},
+            {"role": "customer", "text": "I still need clarity on the payment."},
+        ],
+        flags=[{"code": "follow_up", "message": "Next steps were not clearly confirmed."}],
+    )
+
+    assert "Write an after-call coaching summary for the manager." in prompt
+    assert "colleague: I will take ownership of this issue." in prompt
+    assert "customer: I still need clarity on the payment." in prompt
+    assert "follow_up" in prompt
+    assert "Next steps were not clearly confirmed." in prompt
+
+
 @pytest.mark.asyncio
 async def test_summary_service_builds_structured_llm_summary() -> None:
     service = SummaryService()
@@ -59,6 +83,35 @@ async def test_summary_service_returns_none_for_malformed_llm_output() -> None:
         flags=[],
         prompt_builder=prompt_builder,
         llm_client=BadLLMClient(),
+    )
+
+    assert summary is None
+
+
+@pytest.mark.asyncio
+async def test_summary_service_returns_none_when_llm_raises() -> None:
+    class FailingLLMClient:
+        async def complete(self, *, prompt: str) -> dict[str, str]:
+            raise RuntimeError("llm unavailable")
+
+    service = SummaryService()
+    prompt_builder = PromptBuilder(persona={"name": "colleague_contact"})
+
+    summary = await service.build(
+        transcript=[{"role": "colleague", "text": "Hello"}],
+        flags=[],
+        prompt_builder=prompt_builder,
+        llm_client=FailingLLMClient(),
+    )
+
+    assert summary is None
+
+
+def test_summary_service_legacy_build_call_returns_none() -> None:
+    service = SummaryService()
+
+    summary = service.build(
+        [{"role": "colleague", "text": "Hello"}]
     )
 
     assert summary is None
