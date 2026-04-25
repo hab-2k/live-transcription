@@ -24,12 +24,19 @@ class OpenAICompatibleClient:
         self._api_key = api_key
         self._model = model
 
-    async def complete(self, *, prompt: str) -> dict[str, Any]:
+    async def complete(
+        self,
+        *,
+        prompt: str,
+        response_format: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         payload = {
             "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
         }
+        if response_format is not None:
+            payload["response_format"] = response_format
         started_at = time.perf_counter()
         logger.info(
             "llm request started: base_url=%s model=%s prompt_chars=%d",

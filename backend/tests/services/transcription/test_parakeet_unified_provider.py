@@ -84,6 +84,8 @@ def _make_provider(transcriber: FakeTranscriber, source: str = "microphone") -> 
     stream_ctx = model.transcribe_stream()
     provider._stream_ctxs[source] = stream_ctx
     provider._transcribers[source] = stream_ctx.__enter__()
+    provider._prev_finalized_counts[source] = 0
+    provider._prev_draft_texts[source] = ""
     return provider
 
 
@@ -344,7 +346,8 @@ async def test_provider_isolates_mic_and_system_streams(monkeypatch: pytest.Monk
     _install_fake_mlx(monkeypatch)
     mic_transcriber = FakeTranscriber()
     sys_transcriber = FakeTranscriber()
-    model = CyclingModel([mic_transcriber, sys_transcriber])
+    mic_transcriber_2 = FakeTranscriber()  # replacement after mic finalize
+    model = CyclingModel([mic_transcriber, sys_transcriber, mic_transcriber_2])
 
     fake_parakeet_mlx = ModuleType("parakeet_mlx")
     fake_parakeet_mlx.from_pretrained = lambda model_id: model
@@ -388,7 +391,9 @@ async def test_provider_isolates_mic_and_system_streams(monkeypatch: pytest.Monk
     assert len(sys_updates) == 1
 
     # Finalize mic — system transcriber should be unaffected
-    assert provider._transcribers.get("system") is not None
+    sys_transcriber_before = provider._transcribers.get("system")
+    await provider.finalize_utterance(source="microphone")
+    assert provider._transcribers.get("system") is sys_transcriber_before
 
     # Push more audio to system — still works on its own transcriber
     await provider.push_audio(

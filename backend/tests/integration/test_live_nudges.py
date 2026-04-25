@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.contracts.session import SessionConfig
+from app.services.audio.base import AudioFrame
 from app.services.coaching.llm_client import OpenAICompatibleClient
 from app.services.coaching.nudge_service import NudgeService
 from app.services.coaching.prompt_builder import PromptBuilder
@@ -24,7 +25,13 @@ class StubLLMClient(OpenAICompatibleClient):
 @pytest.mark.asyncio
 async def test_recent_transcript_window_produces_one_live_nudge() -> None:
     manager = SessionManager(
-        capture_service=FakeCapture(),
+        capture_service=FakeCapture(
+            frames=[
+                AudioFrame(source="microphone", pcm=[0.1, 0.2], sample_rate=16_000),
+                AudioFrame(source="microphone", pcm=[0.1, 0.2], sample_rate=16_000),
+                AudioFrame(source="microphone", pcm=[0.1, 0.2], sample_rate=16_000),
+            ]
+        ),
         provider=FakeProvider(),
         broadcaster=EventBroadcaster(),
         rule_engine=RuleEngine.from_file(Path("backend/config/rules/default.yaml")),

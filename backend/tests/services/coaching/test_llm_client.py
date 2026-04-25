@@ -1,3 +1,4 @@
+import json
 import logging
 
 import httpx
@@ -48,3 +49,27 @@ async def test_llm_client_logs_request_and_response(caplog) -> None:
     assert "llm request started" in caplog.text
     assert "model=local-model" in caplog.text
     assert "llm request completed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_llm_client_includes_response_format_when_requested() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode("utf-8"))
+        assert payload["response_format"] == {"type": "json_object"}
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "{\"status\":\"ok\"}"}}]},
+        )
+
+    client = OpenAICompatibleClient(
+        base_url="http://localhost:11434/v1",
+        model="local-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = await client.complete(
+        prompt="hello",
+        response_format={"type": "json_object"},
+    )
+
+    assert result["message"] == "{\"status\":\"ok\"}"

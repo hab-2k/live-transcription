@@ -244,9 +244,24 @@ h3 {
   box-shadow: var(--shadow);
 }
 
-.transcript-lane {
+.transcript-lane,
+.nudge-panel {
   min-height: 420px;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 0;
+}
+
+.transcript-lane:last-child,
+.nudge-panel:last-child {
+  margin-bottom: 0;
+}
+
+.live-sidepanel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 
 .lane-header,
@@ -255,11 +270,101 @@ h3 {
   border-bottom: 1px solid var(--border);
 }
 
-.lane-body,
-.nudge-list {
-  display: grid;
+.nudge-panel .panel-header h2 {
+  font-size: 1rem;
+}
+
+.nudge-card {
+  gap: 6px;
+  padding: 12px;
+}
+
+.nudge-card strong {
+  font-size: 0.82rem;
+}
+
+.nudge-card p {
+  font-size: 0.84rem;
+}
+
+.nudge-card__time {
+  font-size: 0.68rem;
+}
+
+.transcript-viewport {
+  position: relative;
+}
+
+.transcript-fade {
+  position: absolute;
+  top: 0;
+  left: 18px;
+  right: 18px;
+  height: 96px;
+  pointer-events: none;
+  z-index: 2;
+  background: linear-gradient(to bottom, var(--surface), transparent);
+  transition: opacity 250ms ease;
+}
+
+.lane-body {
+  display: flex;
+  flex-direction: column-reverse;
   gap: 14px;
   padding: 18px;
+  min-height: 0;
+  max-height: 360px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+  mask-image: linear-gradient(
+    to top,
+    black 28%,
+    rgba(0,0,0,0.5) 60%,
+    transparent 90%
+  );
+  -webkit-mask-image: linear-gradient(
+    to top,
+    black 28%,
+    rgba(0,0,0,0.5) 60%,
+    transparent 90%
+  );
+}
+
+.nudge-list-container {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.nudge-fade {
+  position: absolute;
+  top: 0;
+  left: 18px;
+  right: 18px;
+  height: 80px;
+  pointer-events: none;
+  z-index: 2;
+  background: linear-gradient(to bottom, var(--surface), transparent);
+  transition: opacity 250ms ease;
+  opacity: 0;
+}
+
+.nudge-fade--visible {
+  opacity: 1;
+}
+
+.nudge-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  min-height: 0;
+  max-height: 360px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
 }
 
 .lane-empty,
@@ -292,12 +397,6 @@ h3 {
   font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.04em;
-}
-
-.live-sidepanel {
-  display: grid;
-  align-content: start;
-  gap: 18px;
 }
 
 .nudge-card {

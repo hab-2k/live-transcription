@@ -12,8 +12,8 @@ class SegmentationPolicy:
     @classmethod
     def for_capture_mode(cls, capture_mode: str, *, silence_finalize_ms: int | None = None) -> "SegmentationPolicy":
         if capture_mode == "mic_plus_system":
-            return cls(capture_mode=capture_mode, silence_finalize_ms=silence_finalize_ms or 400, max_chars=100)
-        return cls(capture_mode="mic_only", silence_finalize_ms=silence_finalize_ms or 600, max_chars=120)
+            return cls(capture_mode=capture_mode, silence_finalize_ms=silence_finalize_ms or 800, max_chars=100)
+        return cls(capture_mode="mic_only", silence_finalize_ms=silence_finalize_ms or 1000, max_chars=120)
 
     def should_finalize(self, *, current_text: str, silence_ms: int, source: str) -> bool:  # noqa: ARG002
         text = current_text.strip()

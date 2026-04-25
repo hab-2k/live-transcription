@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.contracts.session import SessionConfig
+from app.services.audio.base import AudioFrame
 from app.services.coaching.nudge_service import NudgeService
 from app.services.coaching.prompt_builder import PromptBuilder
 from app.services.coaching.rule_engine import RuleEngine
@@ -19,7 +20,12 @@ class FailingLLMClient:
 
 
 class SummaryLLMClient:
-    async def complete(self, *, prompt: str) -> dict[str, str]:
+    async def complete(
+        self,
+        *,
+        prompt: str,
+        response_format: dict[str, object] | None = None,
+    ) -> dict[str, str]:
         return {
             "message": """
             {
@@ -35,7 +41,13 @@ class SummaryLLMClient:
 @pytest.mark.asyncio
 async def test_llm_failure_keeps_transcription_running() -> None:
     manager = SessionManager(
-        capture_service=FakeCapture(),
+        capture_service=FakeCapture(
+            frames=[
+                AudioFrame(source="microphone", pcm=[0.1, 0.2], sample_rate=16_000),
+                AudioFrame(source="microphone", pcm=[0.1, 0.2], sample_rate=16_000),
+                AudioFrame(source="microphone", pcm=[0.1, 0.2], sample_rate=16_000),
+            ]
+        ),
         provider=FakeProvider(),
         broadcaster=EventBroadcaster(),
         rule_engine=RuleEngine.from_file(Path("backend/config/rules/default.yaml")),
@@ -91,7 +103,12 @@ async def test_stop_session_builds_after_call_summary_from_llm() -> None:
 @pytest.mark.asyncio
 async def test_stop_session_returns_none_when_after_call_llm_fails() -> None:
     class FailingSummaryLLMClient:
-        async def complete(self, *, prompt: str) -> dict[str, str]:
+        async def complete(
+            self,
+            *,
+            prompt: str,
+            response_format: dict[str, object] | None = None,
+        ) -> dict[str, str]:
             raise RuntimeError("endpoint unavailable")
 
     manager = SessionManager(

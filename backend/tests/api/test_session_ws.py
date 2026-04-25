@@ -17,7 +17,12 @@ fake_device_service = DeviceService(devices=[
 
 
 class SummaryLLMClient:
-    async def complete(self, *, prompt: str) -> dict[str, str]:
+    async def complete(
+        self,
+        *,
+        prompt: str,
+        response_format: dict[str, object] | None = None,
+    ) -> dict[str, str]:
         return {
             "message": """
             {

@@ -20,6 +20,11 @@ function createLiveState(): SessionState {
 }
 
 describe("sessionReducer", () => {
+  it("defaults transcription to the high accuracy latency preset", () => {
+    expect(createDefaultTranscriptionConfig("mic_only").latencyPreset).toBe("high_accuracy");
+    expect(createInitialSessionState(true).setup.transcription.latencyPreset).toBe("high_accuracy");
+  });
+
   it("revises a transcript turn in place until it is finalized", () => {
     const liveState = createLiveState();
 

@@ -1,10 +1,6 @@
+import { useEffect, useRef, useState } from "react";
 import type { CaptureMode } from "../../lib/state/sessionReducer";
 import type { TranscriptTurnEvent } from "../../lib/types/session";
-
-type TranscriptPanelProps = {
-  captureMode: CaptureMode;
-  transcript: TranscriptTurnEvent[];
-};
 
 function formatClock(value: string): string {
   return value.slice(11, 19);
@@ -19,25 +15,47 @@ function Lane({
   rows: TranscriptTurnEvent[];
   emptyCopy: string;
 }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [showFade, setShowFade] = useState(false);
+
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+
+    const checkFade = () => {
+      setShowFade(el.scrollTop > 20);
+    };
+
+    el.addEventListener("scroll", checkFade, { passive: true });
+    checkFade();
+    return () => el.removeEventListener("scroll", checkFade);
+  }, []);
+
+  // Newest first in DOM; column-reverse places them at the bottom.
+  const ordered = [...rows].reverse();
+
   return (
     <section className="transcript-lane" aria-label={title}>
       <header className="lane-header">
         <h2>{title}</h2>
       </header>
 
-      <div className="lane-body">
-        {rows.length === 0 ? <p className="lane-empty">{emptyCopy}</p> : null}
-        {rows.map((row) => (
-          <article
-            className={`transcript-row ${row.is_final ? "" : "transcript-row--partial"}`}
-            key={row.turn_id}
-          >
-            <time className="transcript-time" dateTime={row.started_at}>
-              {formatClock(row.started_at)}
-            </time>
-            <p>{row.text}</p>
-          </article>
-        ))}
+      <div className="transcript-viewport">
+        {showFade ? <div className="transcript-fade" /> : null}
+        <div ref={bodyRef} className="lane-body">
+          {ordered.length === 0 ? <p className="lane-empty">{emptyCopy}</p> : null}
+          {ordered.map((row) => (
+            <article
+              className={`transcript-row ${row.is_final ? "" : "transcript-row--partial"}`}
+              key={row.turn_id}
+            >
+              <time className="transcript-time" dateTime={row.started_at}>
+                {formatClock(row.started_at)}
+              </time>
+              <p>{row.text}</p>
+            </article>
+          ))}
+        </div>
       </div>
     </section>
   );

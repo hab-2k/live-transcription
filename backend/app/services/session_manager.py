@@ -29,6 +29,7 @@ from app.services.transcription.timeline import TranscriptTimelineAssembler
 from app.services.transcription.vad import SileroVadService, VadDecision, VadService
 
 logger = logging.getLogger(__name__)
+LIVE_COACHING_TURN_INTERVAL = 3
 
 
 @dataclass(slots=True)
@@ -38,6 +39,7 @@ class SessionRuntime:
     prompt_builder: PromptBuilder | None
     llm_client: OpenAICompatibleClient | None
     timeline: TranscriptTimelineAssembler
+    finalized_turns_since_last_coaching_attempt: int = 0
     provider: TranscriptionProvider | None = None
     emit_update: Callable[[ProviderTranscriptUpdate], Awaitable[None]] | None = None
     emit_event: Callable[[TranscriptChunk], Awaitable[None]] | None = None
@@ -45,6 +47,7 @@ class SessionRuntime:
         default_factory=lambda: SegmentationPolicy.for_capture_mode("mic_only")
     )
     vad_services: dict[str, VadService] = field(default_factory=dict)
+    vad_was_active: dict[str, bool] = field(default_factory=dict)
     forced_finalized_prefixes: dict[str, str] = field(default_factory=dict)
 
 
@@ -218,6 +221,7 @@ class SessionManager:
             silence_finalize_ms=runtime.config.transcription.segmentation.silence_finalize_ms if runtime.config.transcription else None,
         )
         runtime.vad_services.clear()
+        runtime.vad_was_active.clear()
         runtime.forced_finalized_prefixes.clear()
 
         status = SessionStatusEvent(status="transcription_reconfigured", session_id=session_id)
@@ -236,6 +240,21 @@ class SessionManager:
         vad_decision = self._detect_vad(runtime=runtime, frame=frame)
 
         if vad_decision is None or vad_decision.active:
+            # Speech just resumed after a VAD-inactive gap — finalize
+            # the previous utterance so the provider opens a fresh
+            # streaming context.  Without this the provider's mel
+            # features see a discontinuity and produce garbled output.
+            if (
+                vad_decision is not None
+                and vad_decision.active
+                and not runtime.vad_was_active.get(frame.source, True)
+            ):
+                await self._finalize_on_speech_resume(
+                    session_id=self._active_session_id,
+                    runtime=runtime,
+                    source=frame.source,
+                )
+
             await runtime.provider.push_audio(
                 source=frame.source,
                 pcm=frame.pcm,
@@ -243,6 +262,7 @@ class SessionManager:
             )
 
         if vad_decision is not None:
+            runtime.vad_was_active[frame.source] = vad_decision.active
             await self._maybe_finalize_turn_after_silence(
                 session_id=self._active_session_id,
                 runtime=runtime,
@@ -345,6 +365,11 @@ class SessionManager:
                 self._events[session_id].append(flag)
                 await self.broadcaster.publish(session_id, flag.model_dump())
 
+        runtime.finalized_turns_since_last_coaching_attempt += 1
+        if runtime.finalized_turns_since_last_coaching_attempt < LIVE_COACHING_TURN_INTERVAL:
+            return
+        runtime.finalized_turns_since_last_coaching_attempt = 0
+
         prompt = runtime.prompt_builder.build(
             transcript=transcript_window,
             flags=[flag.model_dump() for flag in rule_result.flags],
@@ -439,6 +464,55 @@ class SessionManager:
             runtime.vad_services[source] = service
         return service
 
+    async def _finalize_on_speech_resume(
+        self,
+        *,
+        session_id: str,
+        runtime: SessionRuntime,
+        source: str,
+    ) -> None:
+        """Finalize any open utterance when speech resumes after a gap.
+
+        This ensures the provider opens a fresh streaming context so
+        the new speech doesn't hit a stale mel-feature window.
+        """
+        current_text = runtime.timeline.open_text(source)
+        if not current_text:
+            return
+
+        provider_finalize = getattr(runtime.provider, "finalize_utterance", None)
+        if callable(provider_finalize):
+            flushed = await provider_finalize(source=source)
+            if flushed:
+                runtime.forced_finalized_prefixes.pop(source, None)
+                return
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+        role = role_for_chunk(
+            chunk=TranscriptChunk(
+                source=source,
+                text=current_text,
+                is_partial=False,
+                started_at=timestamp,
+                ended_at=timestamp,
+                confidence=0.0,
+            ),
+            capture_mode=runtime.config.capture_mode,
+        )
+        turn_event = runtime.timeline.finalize_open_turn(
+            stream_id=source,
+            source=source,
+            role=role,
+            ended_at=timestamp,
+            confidence=0.0,
+        )
+        if turn_event is None:
+            return
+
+        runtime.forced_finalized_prefixes[source] = turn_event.text
+        self._events[session_id].append(turn_event)
+        await self.broadcaster.publish(session_id, turn_event.model_dump())
+
     async def _maybe_finalize_turn_after_silence(
         self,
         *,
@@ -465,6 +539,9 @@ class SessionManager:
             flushed = await provider_finalize(source=frame.source)
             if flushed:
                 runtime.forced_finalized_prefixes.pop(frame.source, None)
+                vad_service = runtime.vad_services.get(frame.source)
+                if vad_service is not None:
+                    vad_service.reset()
                 return
 
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -490,6 +567,9 @@ class SessionManager:
             return
 
         runtime.forced_finalized_prefixes[frame.source] = turn_event.text
+        vad_service = runtime.vad_services.get(frame.source)
+        if vad_service is not None:
+            vad_service.reset()
         self._events[session_id].append(turn_event)
         await self.broadcaster.publish(session_id, turn_event.model_dump())
 

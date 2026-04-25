@@ -66,7 +66,22 @@ export function SetupScreen({
     });
   }, [systemAudio]);
 
-  const microphones = devices.filter((d) => d.kind === "input");
+  const microphones = devices
+    .filter((d) => d.kind === "input")
+    .sort((a, b) => {
+      const builtIn = [
+        "macbook pro",
+        "macbook air",
+        "macbook",
+        "built-in",
+        "internal microphone",
+      ];
+      const aBuiltIn = builtIn.some((kw) => a.label.toLowerCase().includes(kw));
+      const bBuiltIn = builtIn.some((kw) => b.label.toLowerCase().includes(kw));
+      if (aBuiltIn && !bBuiltIn) return -1;
+      if (!aBuiltIn && bBuiltIn) return 1;
+      return 0;
+    });
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

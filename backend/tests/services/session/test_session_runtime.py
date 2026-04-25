@@ -215,6 +215,9 @@ class FakeVadService:
             silence_ms=silence_ms,
         )
 
+    def reset(self) -> None:
+        pass
+
 
 @pytest.mark.asyncio
 async def test_session_uses_selected_persona_and_llm_runtime() -> None:
@@ -234,7 +237,13 @@ async def test_session_uses_selected_persona_and_llm_runtime() -> None:
         return client
 
     manager = SessionManager(
-        capture_service=FakeCapture(),
+        capture_service=FakeCapture(
+            frames=[
+                AudioFrame(source="microphone", pcm=[0.1, 0.2], sample_rate=16_000),
+                AudioFrame(source="microphone", pcm=[0.1, 0.2], sample_rate=16_000),
+                AudioFrame(source="microphone", pcm=[0.1, 0.2], sample_rate=16_000),
+            ]
+        ),
         provider=FakeProvider(),
         broadcaster=EventBroadcaster(),
         rule_engine=RuleEngine.from_file(Path("backend/config/rules/default.yaml")),
@@ -261,8 +270,53 @@ async def test_session_uses_selected_persona_and_llm_runtime() -> None:
     assert [(client.base_url, client.model) for client in llm_clients] == [
         ("http://localhost:1234/v1", "manager-model")
     ]
-    assert llm_clients[0].prompts == ["persona:manager turns:1 flags:0"]
+    assert llm_clients[0].prompts == ["persona:manager turns:3 flags:0"]
     assert any(event.type == "coaching_nudge" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_session_waits_for_three_finalized_turns_before_requesting_live_coaching() -> None:
+    llm_clients: list[RecordingLLMClient] = []
+
+    def llm_client_factory(config: SessionConfig) -> RecordingLLMClient:
+        client = RecordingLLMClient(
+            base_url=config.llm_base_url or "http://localhost:11434/v1",
+            model=config.llm_model or "local-model",
+        )
+        llm_clients.append(client)
+        return client
+
+    manager = SessionManager(
+        capture_service=FakeCapture(frames=[]),
+        provider=FakeProvider(),
+        broadcaster=EventBroadcaster(),
+        rule_engine=RuleEngine.from_file(Path("backend/config/rules/default.yaml")),
+        prompt_builder_factory=lambda persona: StubPromptBuilder(persona),
+        llm_client_factory=llm_client_factory,
+        nudge_service=NudgeService(),
+    )
+
+    session_id = await manager.start_session(
+        SessionConfig(
+            capture_mode="mic_only",
+            microphone_device_id="Built-in Microphone",
+            persona="colleague_contact",
+            coaching_profile="empathy",
+            asr_provider="nemo",
+            llm_base_url="http://localhost:11434/v1",
+            llm_model="local-model",
+        )
+    )
+
+    await manager.provider.push_audio(source="microphone", pcm=[0.2, 0.1], sample_rate=16_000)
+    await manager.provider.push_audio(source="microphone", pcm=[0.2, 0.1], sample_rate=16_000)
+
+    assert llm_clients[0].prompts == []
+
+    await manager.provider.push_audio(source="microphone", pcm=[0.2, 0.1], sample_rate=16_000)
+
+    assert llm_clients[0].prompts == ["persona:colleague_contact turns:3 flags:0"]
+    assert sum(1 for event in manager.list_events(session_id) if event.type == "coaching_nudge") == 1
 
 
 @pytest.mark.asyncio
@@ -303,6 +357,8 @@ async def test_paused_coaching_keeps_transcription_running_until_resumed() -> No
     assert not any(event.type == "coaching_nudge" for event in paused_events)
 
     await manager.set_coaching_paused(session_id, paused=False)
+    await manager.provider.push_audio(source="microphone", pcm=[0.2, 0.1], sample_rate=16_000)
+    await manager.provider.push_audio(source="microphone", pcm=[0.2, 0.1], sample_rate=16_000)
     await manager.provider.push_audio(source="microphone", pcm=[0.2, 0.1], sample_rate=16_000)
 
     resumed_events = manager.list_events(session_id)
@@ -483,7 +539,7 @@ async def test_session_manager_force_finalizes_open_turn_after_silence() -> None
         vad_service_factory=lambda **_: FakeVadService(
             [
                 (True, 0.95, 0),
-                (False, 0.05, 700),
+                (False, 0.05, 1100),
             ]
         ),
     )
@@ -514,9 +570,13 @@ async def test_session_manager_force_finalizes_open_turn_after_silence() -> None
         event for event in manager.list_events(session_id) if getattr(event, "type", None) == "transcript_turn"
     ]
 
-    assert [event.event for event in events] == ["started", "finalized"]
-    assert [event.text for event in events] == ["Hello there", "Hello there"]
-    assert [event.is_final for event in events] == [False, True]
+    # Both frames push audio (VAD no longer gates audio flow), so the
+    # provider emits a partial for each push before silence-finalization
+    # closes the turn.
+    assert events[0].event == "started"
+    assert events[-1].event == "finalized"
+    assert events[-1].text == "Hello there"
+    assert events[-1].is_final is True
 
 
 @pytest.mark.asyncio
@@ -584,7 +644,7 @@ async def test_session_manager_uses_provider_utterance_finalize_when_available()
         vad_service_factory=lambda **_: FakeVadService(
             [
                 (True, 0.95, 0),
-                (False, 0.05, 700),
+                (False, 0.05, 1100),
             ]
         ),
     )
@@ -616,6 +676,7 @@ async def test_session_manager_uses_provider_utterance_finalize_when_available()
     ]
 
     assert provider.finalize_calls == 1
-    assert [event.event for event in events] == ["started", "finalized"]
-    assert [event.text for event in events] == ["Hello there", "Hello there"]
-    assert [event.is_final for event in events] == [False, True]
+    assert events[0].event == "started"
+    assert events[-1].event == "finalized"
+    assert events[-1].text == "Hello there"
+    assert events[-1].is_final is True

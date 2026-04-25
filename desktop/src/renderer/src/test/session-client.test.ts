@@ -118,7 +118,7 @@ describe("parseSessionEvent", () => {
           transcription: {
             provider: "parakeet_unified",
             model: "mlx-community/parakeet-tdt-0.6b-v2",
-            latency_preset: "balanced",
+            latency_preset: "high_accuracy",
             segmentation: { policy: "fixed_lines" },
             coaching: { window_policy: "finalized_turns" },
             vad: {
@@ -165,7 +165,7 @@ describe("parseSessionEvent", () => {
           transcription: {
             provider: "parakeet_unified",
             model: "mlx-community/parakeet-tdt-0.6b-v2",
-            latency_preset: "balanced",
+            latency_preset: "high_accuracy",
             segmentation: { policy: "source_turns" },
             coaching: { window_policy: "finalized_turns" },
             vad: {

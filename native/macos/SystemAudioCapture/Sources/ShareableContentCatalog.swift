@@ -105,6 +105,8 @@ enum ShareableContentCatalog {
                 throw ShareableContentCatalogError.unavailableTarget(id)
             }
 
+            // Exclude nothing — an empty exclusion list captures audio
+            // from all running applications (system-wide).
             return ResolvedTarget(
                 id: id,
                 filter: SCContentFilter(
@@ -118,19 +120,13 @@ enum ShareableContentCatalog {
                 throw ShareableContentCatalogError.unavailableTarget(id)
             }
 
-            let windows = visibleWindows(for: application, in: content)
-            guard !windows.isEmpty else {
-                throw ShareableContentCatalogError.unavailableTarget(id)
-            }
-
-            guard let display = preferredDisplay(for: windows, in: content.displays) ?? content.displays.first else {
-                throw ShareableContentCatalogError.unavailableTarget(id)
-            }
-
+            // Include only the target app; all other apps' audio is excluded.
+            // The display is required by the API but we configure the stream
+            // to not capture any video pixels.
             return ResolvedTarget(
                 id: id,
                 filter: SCContentFilter(
-                    display: display,
+                    display: content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first!,
                     including: [application],
                     exceptingWindows: []
                 )
@@ -140,29 +136,23 @@ enum ShareableContentCatalog {
 
     private static func buildTargets(from content: SCShareableContent) -> [TargetDescriptor] {
         var targets: [TargetDescriptor] = []
-        if let display = primaryDisplay(in: content.displays) {
-            targets.append(
-                TargetDescriptor(
-                    id: entireSystemTargetID,
-                    name: "Entire system audio",
-                    kind: "system",
-                    iconHint: nil,
-                    metadata: ["display_id": Int(display.displayID)]
-                )
+        targets.append(
+            TargetDescriptor(
+                id: entireSystemTargetID,
+                name: "Entire system audio",
+                kind: "system",
+                iconHint: nil,
+                metadata: [:]
             )
-        }
+        )
 
         let sortedApplications = content.applications.sorted {
             $0.applicationName.localizedCaseInsensitiveCompare($1.applicationName) == .orderedAscending
         }
 
+        // Audio-only: list all running apps regardless of window visibility.
         let appTargets: [TargetDescriptor] = sortedApplications.compactMap { application -> TargetDescriptor? in
-            let windows = visibleWindows(for: application, in: content)
-            guard !windows.isEmpty else {
-                return nil
-            }
-
-            return TargetDescriptor(
+            TargetDescriptor(
                 id: "\(systemAudioProviderID):\(application.processID)",
                 name: application.applicationName,
                 kind: "application",
@@ -178,32 +168,8 @@ enum ShareableContentCatalog {
         return targets
     }
 
-    private static func visibleWindows(
-        for application: SCRunningApplication,
-        in content: SCShareableContent
-    ) -> [SCWindow] {
-        content.windows.filter {
-            $0.isOnScreen && $0.owningApplication?.processID == application.processID
-        }
-    }
-
-    private static func preferredDisplay(
-        for windows: [SCWindow],
-        in displays: [SCDisplay]
-    ) -> SCDisplay? {
-        displays.max { lhs, rhs in
-            overlapArea(for: windows, on: lhs) < overlapArea(for: windows, on: rhs)
-        }
-    }
-
     private static func primaryDisplay(in displays: [SCDisplay]) -> SCDisplay? {
         displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? displays.first
-    }
-
-    private static func overlapArea(for windows: [SCWindow], on display: SCDisplay) -> CGFloat {
-        windows.reduce(0) { partialResult, window in
-            partialResult + window.frame.intersection(display.frame).area
-        }
     }
 
     private static func parseTargetID(_ targetID: String) -> TargetSelection? {
@@ -227,14 +193,4 @@ enum ShareableContentCatalog {
 private enum TargetSelection {
     case system
     case application(pid: Int)
-}
-
-private extension CGRect {
-    var area: CGFloat {
-        guard !isNull, !isEmpty else {
-            return 0
-        }
-
-        return width * height
-    }
 }

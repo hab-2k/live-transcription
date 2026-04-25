@@ -17,6 +17,9 @@ class VadService(Protocol):
     def detect(self, frame: np.ndarray, *, sample_rate: int) -> VadDecision:
         """Return normalized speech-activity state for one frame."""
 
+    def reset(self) -> None:
+        """Reset internal state at utterance boundaries."""
+
 
 class SileroVadService:
     def __init__(self, *, model: Any | None = None, threshold: float = 0.5, min_silence_ms: int = 600) -> None:
@@ -24,6 +27,7 @@ class SileroVadService:
         self._threshold = threshold
         self._min_silence_ms = min_silence_ms
         self._silence_ms = 0
+        self._post_speech_silence_ms = 0
         self._speech_active = False
 
     def detect(self, frame: np.ndarray, *, sample_rate: int) -> VadDecision:
@@ -32,17 +36,33 @@ class SileroVadService:
 
         if score >= self._threshold:
             self._silence_ms = 0
+            self._post_speech_silence_ms = 0
             self._speech_active = True
         else:
             self._silence_ms += frame_ms
             if self._silence_ms >= self._min_silence_ms:
-                self._speech_active = False
+                if self._speech_active:
+                    # Speech just went inactive — start counting
+                    # post-speech silence from zero so downstream
+                    # segmentation has a clean window to evaluate.
+                    self._post_speech_silence_ms = 0
+                    self._speech_active = False
+                else:
+                    self._post_speech_silence_ms += frame_ms
 
         return VadDecision(
             active=self._speech_active,
             speech_confidence=score,
-            silence_ms=self._silence_ms,
+            silence_ms=self._post_speech_silence_ms,
         )
+
+    def reset(self) -> None:
+        """Reset model hidden state and counters at utterance boundaries."""
+        # if hasattr(self._model, "reset_states"):
+        #     self._model.reset_states()
+        self._silence_ms = 0
+        self._post_speech_silence_ms = 0
+        self._speech_active = False
 
     @staticmethod
     def _load_default_model() -> Any:

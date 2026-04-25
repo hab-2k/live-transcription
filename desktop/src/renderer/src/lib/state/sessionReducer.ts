@@ -69,7 +69,7 @@ export function createDefaultTranscriptionConfig(captureMode: CaptureMode): Tran
   return {
     provider: "parakeet_unified",
     model: "mlx-community/parakeet-tdt-0.6b-v2",
-    latencyPreset: "balanced",
+    latencyPreset: "high_accuracy",
     segmentation: {
       policy: captureMode === "mic_only" ? "fixed_lines" : "source_turns",
     },

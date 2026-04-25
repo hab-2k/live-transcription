@@ -6,7 +6,7 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     default_asr_provider: str = "parakeet_unified"
-    transcription_latency_preset: str = "balanced"
+    transcription_latency_preset: str = "high_accuracy"
     transcription_segmentation_policy: str = "source_turns"
     transcription_coaching_window_policy: str = "finalized_turns"
     transcription_vad_provider: str = "silero_vad"

@@ -10,11 +10,15 @@ class FakeSileroModel:
     def __init__(self, scores: list[float]) -> None:
         self._scores = scores
         self._index = 0
+        self.reset_count = 0
 
     def __call__(self, frame: np.ndarray, sample_rate: int) -> float:  # noqa: ARG002
         score = self._scores[min(self._index, len(self._scores) - 1)]
         self._index += 1
         return score
+
+    def reset_states(self) -> None:
+        self.reset_count += 1
 
 
 class TensorExpectingSileroModel:
@@ -88,3 +92,43 @@ def test_silero_vad_wrapper_chunks_1024_sample_frames_for_16khz_model() -> None:
     assert all(call.shape == (512,) for call, _ in model.calls)
     np.testing.assert_array_equal(model.calls[0][0].numpy(), np.arange(512, dtype=np.float32))
     np.testing.assert_array_equal(model.calls[1][0].numpy(), np.arange(512, 1024, dtype=np.float32))
+
+
+def test_silero_vad_post_speech_silence_accumulates_after_inactive() -> None:
+    vad_module = importlib.import_module("app.services.transcription.vad")
+    model = FakeSileroModel([0.9, 0.1, 0.1, 0.1, 0.1])
+    vad = vad_module.SileroVadService(model=model, threshold=0.5, min_silence_ms=30)
+
+    # Speech → silence hangover → inactive
+    vad.detect(np.ones(320, dtype=np.float32), sample_rate=16_000)
+    vad.detect(np.zeros(320, dtype=np.float32), sample_rate=16_000)
+    just_inactive = vad.detect(np.zeros(320, dtype=np.float32), sample_rate=16_000)
+    assert just_inactive.active is False
+    # silence_ms resets to 0 on the frame that flips inactive
+    assert just_inactive.silence_ms == 0
+
+    # Subsequent silent frames accumulate post-speech silence
+    next_frame = vad.detect(np.zeros(320, dtype=np.float32), sample_rate=16_000)
+    assert next_frame.active is False
+    assert next_frame.silence_ms == 20
+
+
+def test_silero_vad_reset_clears_state_and_model_hidden() -> None:
+    vad_module = importlib.import_module("app.services.transcription.vad")
+    model = FakeSileroModel([0.9, 0.1, 0.1, 0.1, 0.1])
+    vad = vad_module.SileroVadService(model=model, threshold=0.5, min_silence_ms=30)
+
+    # Drive into silence
+    vad.detect(np.ones(320, dtype=np.float32), sample_rate=16_000)
+    vad.detect(np.zeros(320, dtype=np.float32), sample_rate=16_000)
+    vad.detect(np.zeros(320, dtype=np.float32), sample_rate=16_000)
+    decision = vad.detect(np.zeros(320, dtype=np.float32), sample_rate=16_000)
+    assert decision.active is False
+    assert decision.silence_ms == 20
+
+    vad.reset()
+
+    # After reset, counters are cleared
+    decision = vad.detect(np.zeros(320, dtype=np.float32), sample_rate=16_000)
+    assert decision.silence_ms == 0
+    assert decision.active is False

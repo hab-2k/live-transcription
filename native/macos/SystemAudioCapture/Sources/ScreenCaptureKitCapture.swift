@@ -7,6 +7,7 @@ import ScreenCaptureKit
 enum ScreenCaptureKitCaptureError: Error, CustomStringConvertible {
     case conversionFailed
     case unsupportedAudioFormat
+    case sharingCancelled
 
     var description: String {
         switch self {
@@ -14,6 +15,8 @@ enum ScreenCaptureKitCaptureError: Error, CustomStringConvertible {
             return "Failed to convert ScreenCaptureKit audio to float32 PCM."
         case .unsupportedAudioFormat:
             return "ScreenCaptureKit returned an unsupported audio buffer format."
+        case .sharingCancelled:
+            return "User cancelled the content sharing picker."
         }
     }
 }
@@ -31,6 +34,7 @@ final class ScreenCaptureKitAudioCapture: NSObject, SCStreamOutput, SCStreamDele
     private var converter: AVAudioConverter?
     private var converterInputFormat: AVAudioFormat?
     private var isStopping = false
+    private var pickerObserver: PickerObserver?
 
     init(targetID: String, targetSampleRate: Int) {
         self.targetID = targetID
@@ -50,17 +54,32 @@ final class ScreenCaptureKitAudioCapture: NSObject, SCStreamOutput, SCStreamDele
         }
 
         let resolvedTarget = try await ShareableContentCatalog.resolveTarget(id: targetID)
-        let configuration = SCStreamConfiguration()
-        configuration.capturesAudio = true
-        configuration.sampleRate = targetSampleRate
-        configuration.channelCount = 1
-        configuration.excludesCurrentProcessAudio = true
+        let configuration = buildStreamConfiguration()
 
         let stream = SCStream(filter: resolvedTarget.filter, configuration: configuration, delegate: self)
         self.stream = stream
 
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: outputQueue)
-        try await startCapture(stream)
+
+        do {
+            try await stream.startCapture()
+        } catch {
+            // On macOS 15+, programmatic capture can fail if the user
+            // previously stopped sharing.  Fall back to the system
+            // content sharing picker to re-authorize.
+            fputs("[system-audio-capture] programmatic capture failed (\(error)), presenting system sharing picker…\n", stderr)
+
+            try? stream.removeStreamOutput(self, type: .audio)
+            self.stream = nil
+
+            let filter = try await requestFilterViaPicker()
+
+            let retryStream = SCStream(filter: filter, configuration: configuration, delegate: self)
+            self.stream = retryStream
+            try retryStream.addStreamOutput(self, type: .audio, sampleHandlerQueue: outputQueue)
+            try await retryStream.startCapture()
+        }
+
         fputs("[system-audio-capture] streaming \(resolvedTarget.id) -> stdout at \(targetSampleRate) Hz\n", stderr)
     }
 
@@ -77,7 +96,7 @@ final class ScreenCaptureKitAudioCapture: NSObject, SCStreamOutput, SCStreamDele
             // Ignore teardown failures during shutdown.
         }
 
-        await stopCapture(stream)
+        try? await stream.stopCapture()
         self.stream = nil
         self.converter = nil
         self.converterInputFormat = nil
@@ -102,6 +121,38 @@ final class ScreenCaptureKitAudioCapture: NSObject, SCStreamOutput, SCStreamDele
             try handleAudioSampleBuffer(sampleBuffer)
         } catch {
             fputs("Error: \(error)\n", stderr)
+        }
+    }
+
+    // MARK: - Private
+
+    private func buildStreamConfiguration() -> SCStreamConfiguration {
+        let configuration = SCStreamConfiguration()
+        configuration.capturesAudio = true
+        configuration.sampleRate = targetSampleRate
+        configuration.channelCount = 1
+        configuration.excludesCurrentProcessAudio = true
+
+        // Audio-only: we don't consume video frames but SCK requires a
+        // display-based content filter.  Use a small but valid size and
+        // near-zero frame rate to minimize overhead.  1×1 is rejected on
+        // macOS 15+, so use 16×16 as a safe minimum.
+        configuration.width = 16
+        configuration.height = 16
+        configuration.minimumFrameInterval = CMTime(value: 10, timescale: 1)
+
+        return configuration
+    }
+
+    private func requestFilterViaPicker() async throws -> SCContentFilter {
+        try await withCheckedThrowingContinuation { continuation in
+            let observer = PickerObserver(continuation: continuation)
+            self.pickerObserver = observer
+
+            let picker = SCContentSharingPicker.shared
+            picker.isActive = true
+            picker.add(observer)
+            picker.present()
         }
     }
 
@@ -194,24 +245,36 @@ final class ScreenCaptureKitAudioCapture: NSObject, SCStreamOutput, SCStreamDele
             inputFormat.commonFormat == targetFormat.commonFormat &&
             inputFormat.isInterleaved == targetFormat.isInterleaved
     }
+}
 
-    private func startCapture(_ stream: SCStream) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            stream.startCapture { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
-                }
-            }
-        }
+// MARK: - Content Sharing Picker Observer
+
+@available(macOS 14.0, *)
+private final class PickerObserver: NSObject, SCContentSharingPickerObserver {
+    private var continuation: CheckedContinuation<SCContentFilter, Error>?
+
+    init(continuation: CheckedContinuation<SCContentFilter, Error>) {
+        self.continuation = continuation
     }
 
-    private func stopCapture(_ stream: SCStream) async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            stream.stopCapture { _ in
-                continuation.resume()
-            }
-        }
+    func contentSharingPicker(_ picker: SCContentSharingPicker, didCancelFor stream: SCStream?) {
+        continuation?.resume(throwing: ScreenCaptureKitCaptureError.sharingCancelled)
+        continuation = nil
+        picker.remove(self)
+        picker.isActive = false
+    }
+
+    func contentSharingPicker(_ picker: SCContentSharingPicker, didUpdateWith filter: SCContentFilter, for stream: SCStream?) {
+        continuation?.resume(returning: filter)
+        continuation = nil
+        picker.remove(self)
+        picker.isActive = false
+    }
+
+    func contentSharingPickerStartDidFailWithError(_ error: any Error) {
+        continuation?.resume(throwing: error)
+        continuation = nil
+        SCContentSharingPicker.shared.remove(self)
+        SCContentSharingPicker.shared.isActive = false
     }
 }

@@ -56,7 +56,7 @@ class ParakeetUnifiedProvider:
         emit_update: UpdateSink | None = None,
         emit_event: EventSink | None = None,
     ) -> None:
-        self._emit_event = emit_update or emit_event  # type: ignore[assignment]
+        self._emit_event = emit_event
         self._emit_update = emit_update
         self._total_samples.clear()
         self._sample_rates.clear()
@@ -93,15 +93,19 @@ class ParakeetUnifiedProvider:
             self._total_samples[source] = 0
             logger.info("stream started: source=%s sample_rate=%d", source, sample_rate)
 
+        if source not in self._transcribers:
             # Lazy: open a streaming context for this source
             async with self._lock:
-                stream_ctx, transcriber = await self._run_on_executor(
-                    lambda: self._open_stream_for_model(self._model)
-                )
-                self._stream_ctxs[source] = stream_ctx
-                self._transcribers[source] = transcriber
-                self._prev_finalized_counts[source] = 0
-                self._prev_draft_texts[source] = ""
+                if self._model is None:
+                    return
+                if source not in self._transcribers:
+                    stream_ctx, transcriber = await self._run_on_executor(
+                        lambda: self._open_stream_for_model(self._model)
+                    )
+                    self._stream_ctxs[source] = stream_ctx
+                    self._transcribers[source] = transcriber
+                    self._prev_finalized_counts[source] = 0
+                    self._prev_draft_texts[source] = ""
 
         self._total_samples[source] += samples.size
 
@@ -231,6 +235,11 @@ class ParakeetUnifiedProvider:
             self._prev_finalized_counts.clear()
             self._prev_draft_texts.clear()
             self._model = None
+
+        self._total_samples.clear()
+        self._sample_rates.clear()
+        self._audio_buffers.clear()
+        self._audio_buffer_samples.clear()
 
         for src, text in pending_stop_updates:
             logger.info("finalized on stop: source=%s text=%r", src, text)

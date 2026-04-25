@@ -220,16 +220,17 @@ class ScreenCaptureKitSystemAudioProvider:
         self._on_audio = None
 
     async def _read_loop(self, sample_rate: int) -> None:
-        assert self._process is not None
-        if self._process.stdout is None:
+        proc = self._process
+        if proc is None or proc.stdout is None:
             return
 
+        stdout = proc.stdout
         bytes_per_block = BLOCK_SAMPLES * 4
         loop = asyncio.get_running_loop()
 
         try:
             while True:
-                data = await loop.run_in_executor(None, self._process.stdout.read, bytes_per_block)
+                data = await loop.run_in_executor(None, stdout.read, bytes_per_block)
                 if not data:
                     break
 
@@ -246,15 +247,15 @@ class ScreenCaptureKitSystemAudioProvider:
             logger.exception("System audio read loop error")
 
     async def _drain_stderr(self) -> None:
-        if self._process is None:
-            return
-        if self._process.stderr is None:
+        proc = self._process
+        if proc is None or proc.stderr is None:
             return
 
+        stderr = proc.stderr
         loop = asyncio.get_running_loop()
         try:
             while True:
-                line = await loop.run_in_executor(None, self._process.stderr.readline)
+                line = await loop.run_in_executor(None, stderr.readline)
                 if not line:
                     break
                 logger.info("system-audio-capture: %s", line.decode("utf-8", errors="replace").rstrip())

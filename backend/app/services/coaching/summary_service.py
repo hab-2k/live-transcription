@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable
 from typing import Any
 
-from pydantic import BaseModel
+import httpx
+from pydantic import BaseModel, ConfigDict
 
 from app.services.coaching.llm_client import OpenAICompatibleClient
 from app.services.coaching.prompt_builder import PromptBuilder
 
+logger = logging.getLogger(__name__)
+
 
 class CallSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     recap: str
     strengths: list[str]
     weaknesses: list[str]
@@ -53,7 +59,43 @@ class SummaryService:
             flags=flags,
         )
         try:
-            completion = await llm_client.complete(prompt=prompt)
+            completion = await self._request_completion(
+                prompt=prompt,
+                llm_client=llm_client,
+            )
             return CallSummary.model_validate_json(completion["message"])
         except Exception:
+            logger.exception("after-call summary generation failed")
             return None
+
+    @staticmethod
+    def _response_format() -> dict[str, Any]:
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "after_call_summary",
+                "strict": True,
+                "schema": CallSummary.model_json_schema(),
+            },
+        }
+
+    async def _request_completion(
+        self,
+        *,
+        prompt: str,
+        llm_client: OpenAICompatibleClient,
+    ) -> dict[str, Any]:
+        try:
+            return await llm_client.complete(
+                prompt=prompt,
+                response_format=self._response_format(),
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in {400, 404, 422}:
+                raise
+
+            logger.warning(
+                "after-call summary structured output unsupported: status=%s; retrying without response_format",
+                exc.response.status_code,
+            )
+            return await llm_client.complete(prompt=prompt)

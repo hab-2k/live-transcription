@@ -67,4 +67,5 @@ def test_settings_expose_transcription_runtime_defaults() -> None:
     settings = Settings(_env_file=None)
 
     assert hasattr(settings, "transcription_latency_preset")
+    assert settings.transcription_latency_preset == "high_accuracy"
     assert hasattr(settings, "transcription_vad_provider")
