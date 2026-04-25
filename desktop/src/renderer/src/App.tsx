@@ -31,6 +31,7 @@ export default function App() {
   );
   const [startError, setStartError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   const disconnectRef = useRef<(() => void) | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -58,17 +59,24 @@ export default function App() {
   }, []);
 
   const handleStop = useCallback(async () => {
-    if (sessionIdRef.current) {
-      try {
-        const response = await stopSession(sessionIdRef.current, BACKEND_URL);
-        dispatch({ type: "complete_session", summary: response.summary });
-      } catch (err) {
-        console.error("Failed to stop session:", err);
-      }
-    }
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) return;
+
+    sessionIdRef.current = null;
     disconnectRef.current?.();
     disconnectRef.current = null;
-    sessionIdRef.current = null;
+
+    dispatch({ type: "complete_session", summary: null });
+    setSummaryLoading(true);
+
+    try {
+      const response = await stopSession(sessionId, BACKEND_URL);
+      dispatch({ type: "complete_session", summary: response.summary });
+    } catch (err) {
+      console.error("Failed to stop session:", err);
+    } finally {
+      setSummaryLoading(false);
+    }
   }, []);
 
   const handlePauseCoaching = useCallback(async () => {
@@ -137,6 +145,7 @@ export default function App() {
     if (state.endedView === "summary") {
       return (
         <SummaryScreen
+          loading={summaryLoading}
           summary={state.summary}
           onStartNewCall={handleResetSession}
           onViewTranscript={handleShowEndedTranscript}

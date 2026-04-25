@@ -8,6 +8,8 @@ desktop/.vite/
 .cache/
 .superpowers/
 .worktrees/
+__pycache__/
+*.py[cod]
 *.log
 .env
 .env.*

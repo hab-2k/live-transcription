@@ -14,7 +14,7 @@ async def test_mode2_emits_revisable_turns_per_source() -> None:
         capture_service=FakeCapture(
             frames=[
                 AudioFrame(source="microphone", pcm=[0.1], sample_rate=16_000),
-                AudioFrame(source="blackhole", pcm=[0.2], sample_rate=16_000),
+                AudioFrame(source="system", pcm=[0.2], sample_rate=16_000),
             ]
         ),
         provider=FakeProvider(),
@@ -23,7 +23,7 @@ async def test_mode2_emits_revisable_turns_per_source() -> None:
 
     session_id = await manager.start_session(
         SessionConfig(
-            capture_mode="mic_plus_blackhole",
+            capture_mode="mic_plus_system",
             microphone_device_id="Built-in Microphone",
             persona="colleague_contact",
             coaching_profile="empathy",
@@ -36,5 +36,5 @@ async def test_mode2_emits_revisable_turns_per_source() -> None:
     transcript_turns = [event for event in events if event.type == "transcript_turn"]
 
     assert any(event.role == "colleague" and event.source == "microphone" for event in transcript_turns)
-    assert any(event.role == "customer" and event.source == "blackhole" for event in transcript_turns)
+    assert any(event.role == "customer" and event.source == "system" for event in transcript_turns)
     assert not any(event.type == "transcript" for event in events)

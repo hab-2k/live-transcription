@@ -2,7 +2,7 @@ import type { VoiceActivity } from "../../lib/state/sessionReducer";
 
 type MicIndicatorProps = {
   voiceActivity: VoiceActivity;
-  captureMode: "mic_only" | "mic_plus_blackhole";
+  captureMode: "mic_only" | "mic_plus_system";
 };
 
 function Indicator({ label, level, active }: { label: string; level: number; active: boolean }) {
@@ -27,11 +27,11 @@ export function MicIndicator({ voiceActivity, captureMode }: MicIndicatorProps) 
         level={voiceActivity.microphone.level}
         active={voiceActivity.microphone.active}
       />
-      {captureMode === "mic_plus_blackhole" && (
+      {captureMode === "mic_plus_system" && (
         <Indicator
           label="Customer"
-          level={voiceActivity.blackhole.level}
-          active={voiceActivity.blackhole.active}
+          level={voiceActivity.system.level}
+          active={voiceActivity.system.active}
         />
       )}
     </div>

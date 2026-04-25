@@ -10,7 +10,7 @@ import sounddevice as sd
 class AudioDevice:
     id: str
     label: str
-    kind: Literal["input", "loopback"]
+    kind: Literal["input"]
 
 
 @dataclass(slots=True)
@@ -42,8 +42,5 @@ class DeviceService:
         for dev in devices:
             if dev["max_input_channels"] > 0:
                 name = dev["name"]
-                kind: Literal["input", "loopback"] = (
-                    "loopback" if "blackhole" in name.lower() else "input"
-                )
-                result.append(AudioDevice(id=name, label=name, kind=kind))
+                result.append(AudioDevice(id=name, label=name, kind="input"))
         return result

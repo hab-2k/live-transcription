@@ -7,7 +7,7 @@ describe("TranscriptPanel lanes", () => {
   it("renders separate colleague and customer transcript lanes", () => {
     render(
       <TranscriptPanel
-        captureMode="mic_plus_blackhole"
+        captureMode="mic_plus_system"
         transcript={[
           {
             type: "transcript_turn",
@@ -28,7 +28,7 @@ describe("TranscriptPanel lanes", () => {
             revision: 1,
             event: "finalized",
             role: "customer",
-            source: "blackhole",
+            source: "system",
             text: "I'm calling about a payment.",
             is_final: true,
             started_at: "2026-04-23T18:00:02Z",

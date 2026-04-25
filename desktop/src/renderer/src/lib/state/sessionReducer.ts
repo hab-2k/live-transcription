@@ -7,7 +7,7 @@ import type {
   VoiceActivityEvent,
 } from "../types/session";
 
-export type CaptureMode = "mic_only" | "mic_plus_blackhole";
+export type CaptureMode = "mic_only" | "mic_plus_system";
 export type Persona = "colleague_contact" | "manager";
 
 export type SessionSetup = {
@@ -15,6 +15,7 @@ export type SessionSetup = {
   persona: Persona;
   microphoneDeviceId: string;
   transcription: TranscriptionConfig;
+  systemAudioPid?: number;
 };
 
 export type SummaryView = {
@@ -35,7 +36,7 @@ export type DebugLog = {
 
 export type VoiceActivity = {
   microphone: { level: number; active: boolean };
-  blackhole: { level: number; active: boolean };
+  system: { level: number; active: boolean };
 };
 
 export type SessionState = {
@@ -83,10 +84,10 @@ export function createDefaultTranscriptionConfig(captureMode: CaptureMode): Tran
 }
 
 const DEFAULT_SETUP: SessionSetup = {
-  captureMode: "mic_plus_blackhole",
+  captureMode: "mic_plus_system",
   persona: "colleague_contact",
   microphoneDeviceId: "",
-  transcription: createDefaultTranscriptionConfig("mic_plus_blackhole"),
+  transcription: createDefaultTranscriptionConfig("mic_plus_system"),
 };
 
 function makeDebugLog(label: string, message: string): DebugLog {
@@ -100,7 +101,7 @@ function makeDebugLog(label: string, message: string): DebugLog {
 
 const INITIAL_VOICE_ACTIVITY: VoiceActivity = {
   microphone: { level: 0, active: false },
-  blackhole: { level: 0, active: false },
+  system: { level: 0, active: false },
 };
 
 function upsertTranscriptTurn(
@@ -224,7 +225,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       }
 
       if (action.event.type === "voice_activity") {
-        const key = action.event.source === "blackhole" ? "blackhole" : "microphone";
+        const key = action.event.source === "system" ? "system" : "microphone";
         return {
           ...state,
           voiceActivity: {

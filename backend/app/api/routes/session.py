@@ -16,6 +16,7 @@ from app.services.debug.debug_store import DebugStore
 from app.services.diarization.noop_diarizer import NoopDiarizer
 from app.services.events.broadcaster import broadcaster
 from app.services.session_manager import SessionManager
+from app.services.audio.system_audio_capture import list_capturable_apps
 from app.services.transcription.registry import build_provider
 
 router = APIRouter()
@@ -65,6 +66,12 @@ session_manager = SessionManager(
     llm_client_factory=build_llm_client,
     nudge_service=NudgeService(),
     summary_service=SummaryService(),
+    summary_llm_client=OpenAICompatibleClient(
+        base_url=settings.llm_base_url,
+        model=settings.summary_llm_model or settings.llm_model,
+        api_key=settings.llm_api_key or None,
+        timeout=settings.llm_timeout,
+    ),
     debug_store=DebugStore(),
 )
 
@@ -73,6 +80,13 @@ session_manager = SessionManager(
 def list_devices() -> list[dict[str, str]]:
     logger.info("list_devices requested")
     return [{"id": d.id, "label": d.label, "kind": d.kind} for d in device_service.list_devices()]
+
+
+@router.get("/api/capturable-apps")
+def get_capturable_apps() -> list[dict[str, object]]:
+    logger.info("capturable_apps requested")
+    apps = list_capturable_apps()
+    return [{"name": a.name, "pid": a.pid, "bundle_id": a.bundle_id} for a in apps]
 
 
 @router.post("/api/sessions", status_code=201)

@@ -65,6 +65,7 @@ class SessionManager:
         llm_client_factory: Callable[[SessionConfig], OpenAICompatibleClient] | None = None,
         nudge_service: NudgeService | None = None,
         summary_service: SummaryService | None = None,
+        summary_llm_client: OpenAICompatibleClient | None = None,
         debug_store: DebugStore | None = None,
         runtime_controller: TranscriptionRuntimeController | None = None,
         vad_service_factory: Callable[..., VadService] | None = None,
@@ -82,6 +83,7 @@ class SessionManager:
         self.llm_client_factory = llm_client_factory
         self.nudge_service = nudge_service
         self.summary_service = summary_service
+        self.summary_llm_client = summary_llm_client
         self.debug_store = debug_store
         self.runtime_controller = runtime_controller or TranscriptionRuntimeController()
         self.vad_service_factory = vad_service_factory or self._build_vad_service
@@ -141,18 +143,22 @@ class SessionManager:
         return session_id
 
     async def stop_session(self, session_id: str) -> CallSummary | None:
-        runtime = self._runtimes.get(session_id)
+        runtime = self._runtimes.pop(session_id, None)
         if runtime is None:
             return self._summaries.get(session_id)
+
+        if self._active_session_id == session_id:
+            self._active_session_id = None
 
         await self.capture_service.stop()
         await self.runtime_controller.stop(runtime.provider)
 
         summary = self._summaries.get(session_id)
+        summary_llm_client = self.summary_llm_client or runtime.llm_client
         if (
             self.summary_service is not None
             and runtime.prompt_builder is not None
-            and runtime.llm_client is not None
+            and summary_llm_client is not None
         ):
             transcript = [
                 turn.model_dump()
@@ -168,14 +174,11 @@ class SessionManager:
                 transcript=transcript,
                 flags=flags,
                 prompt_builder=runtime.prompt_builder,
-                llm_client=runtime.llm_client,
+                llm_client=summary_llm_client,
             )
             if summary is not None:
                 self._summaries[session_id] = summary
 
-        if self._active_session_id == session_id:
-            self._active_session_id = None
-        del self._runtimes[session_id]
         return summary
 
     def list_events(self, session_id: str) -> list[SessionEvent]:

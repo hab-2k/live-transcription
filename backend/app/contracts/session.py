@@ -28,7 +28,7 @@ class TranscriptionConfig(BaseModel):
 
 
 class SessionConfig(BaseModel):
-    capture_mode: Literal["mic_only", "mic_plus_blackhole"]
+    capture_mode: Literal["mic_only", "mic_plus_system"]
     microphone_device_id: str
     persona: str
     coaching_profile: str
@@ -37,6 +37,7 @@ class SessionConfig(BaseModel):
     diarization_enabled: bool = False
     llm_base_url: str | None = None
     llm_model: str | None = None
+    system_audio_pid: int | None = None
 
 
 class CoachingPauseRequest(BaseModel):

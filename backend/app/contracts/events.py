@@ -6,7 +6,7 @@ from pydantic import BaseModel
 class TranscriptEvent(BaseModel):
     type: Literal["transcript"] = "transcript"
     role: Literal["colleague", "customer", "shared", "unknown"]
-    source: Literal["microphone", "blackhole", "mixed"]
+    source: Literal["microphone", "system", "mixed"]
     text: str
     is_partial: bool
     started_at: str
@@ -20,7 +20,7 @@ class TranscriptTurnEvent(BaseModel):
     revision: int
     event: Literal["started", "updated", "finalized"]
     role: Literal["colleague", "customer", "shared", "unknown"]
-    source: Literal["microphone", "blackhole", "mixed"]
+    source: Literal["microphone", "system", "mixed"]
     text: str
     is_final: bool
     started_at: str
@@ -52,7 +52,7 @@ class SessionStatusEvent(BaseModel):
 
 class VoiceActivityEvent(BaseModel):
     type: Literal["voice_activity"] = "voice_activity"
-    source: Literal["microphone", "blackhole", "mixed"]
+    source: Literal["microphone", "system", "mixed"]
     level: float
     active: bool
 

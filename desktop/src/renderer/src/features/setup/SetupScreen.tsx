@@ -10,6 +10,7 @@ import {
 import { TranscriptionSettingsFields } from "../transcription/TranscriptionSettingsFields";
 
 type AudioDevice = { id: string; label: string; kind: string };
+type CapturableApp = { name: string; pid: number; bundle_id: string };
 
 type SetupScreenProps = {
   debugEnabled?: boolean;
@@ -27,19 +28,23 @@ export function SetupScreen({
   onStart,
 }: SetupScreenProps) {
   const [devices, setDevices] = useState<AudioDevice[]>([]);
+  const [capturableApps, setCapturableApps] = useState<CapturableApp[]>([]);
+  const [selectedAppPid, setSelectedAppPid] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
-  const [captureMode, setCaptureMode] = useState<CaptureMode>("mic_plus_blackhole");
+  const [captureMode, setCaptureMode] = useState<CaptureMode>("mic_plus_system");
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [transcription, setTranscription] = useState(createDefaultTranscriptionConfig("mic_plus_blackhole"));
+  const [transcription, setTranscription] = useState(createDefaultTranscriptionConfig("mic_plus_system"));
 
   useEffect(() => {
-    fetch(`${BACKEND_URL}/api/devices`)
-      .then((res) => res.json())
-      .then((data: AudioDevice[]) => {
-        setDevices(data);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+    Promise.all([
+      fetch(`${BACKEND_URL}/api/devices`)
+        .then((res) => res.json())
+        .then((data: AudioDevice[]) => setDevices(data)),
+      fetch(`${BACKEND_URL}/api/capturable-apps`)
+        .then((res) => res.json())
+        .then((data: CapturableApp[]) => setCapturableApps(data))
+        .catch(() => {}),
+    ]).finally(() => setLoading(false));
   }, []);
 
   const microphones = devices.filter((d) => d.kind === "input");
@@ -54,6 +59,7 @@ export function SetupScreen({
       persona: formData.get("persona") as Persona,
       microphoneDeviceId: String(formData.get("microphone_device_id") ?? ""),
       transcription,
+      ...(captureMode === "mic_plus_system" && selectedAppPid != null && { systemAudioPid: selectedAppPid }),
     });
   }
 
@@ -121,9 +127,30 @@ export function SetupScreen({
               value={captureMode}
             >
               <option value="mic_only">Microphone only</option>
-              <option value="mic_plus_blackhole">Microphone + BlackHole</option>
+              <option value="mic_plus_system">Microphone + System Audio</option>
             </select>
           </label>
+
+          {captureMode === "mic_plus_system" && (
+            <label className="field">
+              <span>Target Application</span>
+              <select
+                name="system_audio_app"
+                onChange={(event) => {
+                  const pid = event.target.value ? Number(event.target.value) : null;
+                  setSelectedAppPid(pid);
+                }}
+                value={selectedAppPid ?? ""}
+              >
+                <option value="">Select an application...</option>
+                {capturableApps.map((app) => (
+                  <option key={app.pid} value={app.pid}>
+                    {app.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           <label className="field">
             <span>Persona</span>

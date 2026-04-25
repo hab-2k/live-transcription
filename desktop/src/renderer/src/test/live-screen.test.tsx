@@ -27,7 +27,7 @@ const stateWithTranscript: SessionState = {
       revision: 1,
       event: "finalized",
       role: "customer",
-      source: "blackhole",
+      source: "system",
       text: "I'm calling about a payment.",
       is_final: true,
       started_at: "2026-04-23T10:41:14Z",
@@ -47,14 +47,14 @@ const stateWithTranscript: SessionState = {
   ],
   voiceActivity: {
     microphone: { level: 0, active: false },
-    blackhole: { level: 0, active: false },
+    system: { level: 0, active: false },
   },
   debugEnabled: true,
   debugOpen: false,
   debugLogs: [],
   lastRuleFlags: [],
   setup: {
-    captureMode: "mic_plus_blackhole",
+    captureMode: "mic_plus_system",
     persona: "colleague_contact",
     microphoneDeviceId: "Test Mic",
     transcription: {

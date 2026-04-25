@@ -19,7 +19,7 @@ describe("parseSessionEvent", () => {
       revision: 2,
       event: "updated",
       role: "customer",
-      source: "blackhole",
+      source: "system",
       text: "I need help",
       is_final: false,
       started_at: "2026-04-23T18:00:00Z",

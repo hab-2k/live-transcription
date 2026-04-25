@@ -5,14 +5,14 @@ from app.services.transcription.base import TranscriptChunk
 from app.services.transcription.provider_updates import ProviderTranscriptUpdate
 
 
-def role_for_chunk(*, chunk: TranscriptChunk, capture_mode: Literal["mic_only", "mic_plus_blackhole"]) -> str:
+def role_for_chunk(*, chunk: TranscriptChunk, capture_mode: Literal["mic_only", "mic_plus_system"]) -> str:
     if capture_mode == "mic_only":
         return "shared"
 
     if chunk.source == "microphone":
         return "colleague"
 
-    if chunk.source == "blackhole":
+    if chunk.source == "system":
         return "customer"
 
     return "unknown"

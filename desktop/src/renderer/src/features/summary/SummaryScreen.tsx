@@ -2,6 +2,7 @@ import type { SummaryView } from "../../lib/state/sessionReducer";
 
 type SummaryScreenProps = {
   summary: SummaryView | null;
+  loading?: boolean;
   onStartNewCall: () => void;
   onViewTranscript: () => void;
 };
@@ -21,6 +22,7 @@ function SummaryList({ items, title }: { items: string[]; title: string }) {
 
 export function SummaryScreen({
   summary,
+  loading = false,
   onStartNewCall,
   onViewTranscript,
 }: SummaryScreenProps) {
@@ -29,7 +31,9 @@ export function SummaryScreen({
       <section className="summary-card">
         <p className="eyebrow">Session complete</p>
         <h1>Call summary</h1>
-        {summary === null ? (
+        {loading ? (
+          <p className="summary-loading">Generating summary…</p>
+        ) : summary === null ? (
           <p className="summary-unavailable">
             After-call summary unavailable. You can still review the transcript or start a new
             call.

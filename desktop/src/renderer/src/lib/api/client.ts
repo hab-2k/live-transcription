@@ -225,6 +225,7 @@ export async function startSession(
       coaching_profile: "empathy",
       asr_provider: setup.transcription.provider,
       transcription: serializeTranscriptionConfig(setup.transcription),
+      ...(setup.systemAudioPid != null && { system_audio_pid: setup.systemAudioPid }),
     }),
   });
   return readJsonResponse<StartSessionResponse>(response);

@@ -13,7 +13,7 @@ def test_role_for_chunk_maps_dual_source_audio() -> None:
                 ended_at="2026-04-23T18:00:01Z",
                 confidence=0.9,
             ),
-            capture_mode="mic_plus_blackhole",
+            capture_mode="mic_plus_system",
         )
         == "colleague"
     )

@@ -20,6 +20,6 @@ def test_mic_only_segmentation_breaks_long_running_text_after_silence() -> None:
 
 def test_dual_source_segmentation_splits_on_source_change() -> None:
     segmentation = importlib.import_module("app.services.transcription.segmentation")
-    policy = segmentation.SegmentationPolicy.for_capture_mode("mic_plus_blackhole")
+    policy = segmentation.SegmentationPolicy.for_capture_mode("mic_plus_system")
 
-    assert policy.should_split_on_source_change(current_source="microphone", incoming_source="blackhole") is True
+    assert policy.should_split_on_source_change(current_source="microphone", incoming_source="system") is True

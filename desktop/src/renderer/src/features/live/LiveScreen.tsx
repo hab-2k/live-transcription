@@ -18,7 +18,7 @@ type LiveScreenProps = {
 };
 
 function formatCaptureMode(value: SessionState["setup"]["captureMode"]): string {
-  return value === "mic_only" ? "Microphone only" : "Microphone + BlackHole";
+  return value === "mic_only" ? "Microphone only" : "Microphone + System Audio";
 }
 
 function formatPersona(value: SessionState["setup"]["persona"]): string {

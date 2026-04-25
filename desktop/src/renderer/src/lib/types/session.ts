@@ -1,5 +1,5 @@
 export type TranscriptRole = "colleague" | "customer" | "shared" | "unknown";
-export type TranscriptSource = "microphone" | "blackhole" | "mixed";
+export type TranscriptSource = "microphone" | "system" | "mixed";
 export type TranscriptionProvider = "parakeet_unified" | "nemo";
 export type TranscriptionLatencyPreset = "balanced" | "low_latency" | "high_accuracy";
 export type TranscriptionSegmentationPolicy = "source_turns" | "fixed_lines";

@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     llm_model: str = "local-model"
     llm_api_key: str = ""
     llm_timeout: float = 30.0
+    summary_llm_model: str = ""
 
 
 settings = Settings()
